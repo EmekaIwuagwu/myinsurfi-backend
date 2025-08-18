@@ -1,0 +1,396 @@
+    const { getConnection } = require('../config/database');
+const crypto = require('crypto');
+
+// Submit Insurance Claim
+const submitClaim = async (req, res) => {
+  try {
+    const {
+      wallet_address,
+      policy_type,
+      policy_id,
+      claim_amount,
+      description,
+      incident_date,
+      documents_count = 0
+    } = req.body;
+
+    if (!wallet_address || !policy_type || !policy_id || !claim_amount || !description || !incident_date) {
+      return res.status(400).json({
+        success: false,
+        message: 'All required fields must be provided'
+      });
+    }
+
+    // Validate policy_type
+    if (!['home', 'car', 'travel'].includes(policy_type)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid policy type. Must be home, car, or travel'
+      });
+    }
+
+    const connection = getConnection();
+
+    // Generate unique claim ID
+    const timestamp = Date.now();
+    const claim_id = `CLM-${timestamp.toString().slice(-6)}`;
+
+    // Verify policy exists and belongs to user
+    let policyExists = false;
+    const tables = {
+      'home': 'home_insurance_quotes',
+      'car': 'car_insurance_quotes', 
+      'travel': 'travel_insurance_quotes'
+    };
+
+    const [policyCheck] = await connection.execute(
+      `SELECT id FROM ${tables[policy_type]} WHERE id = ? AND wallet_address = ?`,
+      [policy_id, wallet_address]
+    );
+
+    if (policyCheck.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Policy not found or does not belong to this wallet'
+      });
+    }
+
+    // Insert claim
+    const [result] = await connection.execute(`
+      INSERT INTO insurance_claims 
+      (claim_id, wallet_address, policy_type, policy_id, claim_amount, description, 
+       incident_date, documents_count, status) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+    `, [claim_id, wallet_address, policy_type, policy_id, claim_amount, description, 
+        incident_date, documents_count]);
+
+    // Create notification for user
+    await connection.execute(`
+      INSERT INTO notifications (wallet_address, type, title, message)
+      VALUES (?, ?, ?, ?)
+    `, [
+      wallet_address,
+      'claim_submitted',
+      'Claim Submitted Successfully',
+      `Your claim ${claim_id} has been submitted and is being reviewed.`
+    ]);
+
+    // Create notification for admin (using a system wallet address)
+    await connection.execute(`
+      INSERT INTO notifications (wallet_address, type, title, message)
+      VALUES (?, ?, ?, ?)
+    `, [
+      'admin',
+      'new_claim',
+      'New Claim Submitted',
+      `New ${policy_type} insurance claim ${claim_id} submitted by ${wallet_address.slice(0, 8)}...`
+    ]);
+
+    res.status(201).json({
+      success: true,
+      message: 'Claim submitted successfully',
+      data: {
+        claim_id,
+        status: 'pending',
+        submitted_at: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('Submit claim error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+// Get User Claims
+const getUserClaims = async (req, res) => {
+  try {
+    const { wallet_address } = req.params;
+    const { page = 1, limit = 10, status = 'all' } = req.query;
+
+    if (!wallet_address) {
+      return res.status(400).json({
+        success: false,
+        message: 'Wallet address is required'
+      });
+    }
+
+    const connection = getConnection();
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    // Build status filter
+    let statusFilter = '';
+    let queryParams = [wallet_address];
+
+    if (status !== 'all') {
+      statusFilter = 'AND status = ?';
+      queryParams.push(status);
+    }
+
+    // Get user's claims
+    const [claims] = await connection.execute(`
+      SELECT 
+        claim_id,
+        policy_type,
+        claim_amount,
+        description,
+        incident_date,
+        status,
+        created_at,
+        payout_amount,
+        payout_date,
+        admin_notes
+      FROM insurance_claims
+      WHERE wallet_address = ? ${statusFilter}
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `, [...queryParams, parseInt(limit), offset]);
+
+    // Get total count
+    const [countResult] = await connection.execute(`
+      SELECT COUNT(*) as total
+      FROM insurance_claims
+      WHERE wallet_address = ? ${statusFilter}
+    `, queryParams);
+
+    // Format claims
+    const formattedClaims = claims.map(claim => ({
+      ...claim,
+      formatted_amount: parseFloat(claim.claim_amount).toLocaleString('en-US', {
+        style: 'currency',
+        currency: 'USD'
+      }),
+      formatted_payout: claim.payout_amount ? parseFloat(claim.payout_amount).toLocaleString('en-US', {
+        style: 'currency',
+        currency: 'USD'
+      }) : null,
+      days_since_submission: Math.floor((new Date() - new Date(claim.created_at)) / (1000 * 60 * 60 * 24))
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        claims: formattedClaims,
+        pagination: {
+          current_page: parseInt(page),
+          total_pages: Math.ceil(countResult[0].total / parseInt(limit)),
+          total_claims: countResult[0].total,
+          per_page: parseInt(limit)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get user claims error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+// Get Claim Status
+const getClaimStatus = async (req, res) => {
+  try {
+    const { claim_id } = req.params;
+    const { wallet_address } = req.query;
+
+    if (!claim_id || !wallet_address) {
+      return res.status(400).json({
+        success: false,
+        message: 'Claim ID and wallet address are required'
+      });
+    }
+
+    const connection = getConnection();
+
+    // Get claim details
+    const [claims] = await connection.execute(`
+      SELECT 
+        claim_id,
+        policy_type,
+        policy_id,
+        claim_amount,
+        description,
+        incident_date,
+        status,
+        created_at,
+        reviewed_at,
+        payout_amount,
+        payout_date,
+        admin_notes
+      FROM insurance_claims
+      WHERE claim_id = ? AND wallet_address = ?
+    `, [claim_id, wallet_address]);
+
+    if (claims.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Claim not found'
+      });
+    }
+
+    const claim = claims[0];
+
+    // Get related policy details
+    let policyDetails = null;
+    const tables = {
+      'home': 'home_insurance_quotes',
+      'car': 'car_insurance_quotes',
+      'travel': 'travel_insurance_quotes'
+    };
+
+    if (tables[claim.policy_type]) {
+      const [policies] = await connection.execute(`
+        SELECT * FROM ${tables[claim.policy_type]} WHERE id = ?
+      `, [claim.policy_id]);
+      policyDetails = policies[0];
+    }
+
+    // Calculate processing timeline
+    const timeline = [
+      {
+        status: 'submitted',
+        date: claim.created_at,
+        completed: true,
+        description: 'Claim submitted successfully'
+      },
+      {
+        status: 'under_review',
+        date: claim.created_at,
+        completed: ['pending', 'approved', 'rejected', 'processing_payment', 'paid'].includes(claim.status),
+        description: 'Claim is being reviewed by our team'
+      },
+      {
+        status: 'decision',
+        date: claim.reviewed_at,
+        completed: ['approved', 'rejected', 'processing_payment', 'paid'].includes(claim.status),
+        description: claim.status === 'rejected' ? 'Claim rejected' : 'Claim approved'
+      }
+    ];
+
+    if (claim.status === 'approved' || claim.status === 'processing_payment' || claim.status === 'paid') {
+      timeline.push({
+        status: 'processing_payment',
+        date: claim.reviewed_at,
+        completed: ['processing_payment', 'paid'].includes(claim.status),
+        description: 'Payment is being processed'
+      });
+    }
+
+    if (claim.status === 'paid') {
+      timeline.push({
+        status: 'paid',
+        date: claim.payout_date,
+        completed: true,
+        description: 'Payment completed'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        ...claim,
+        formatted_amount: parseFloat(claim.claim_amount).toLocaleString('en-US', {
+          style: 'currency',
+          currency: 'USD'
+        }),
+        formatted_payout: claim.payout_amount ? parseFloat(claim.payout_amount).toLocaleString('en-US', {
+          style: 'currency',
+          currency: 'USD'
+        }) : null,
+        policy_details: policyDetails,
+        timeline
+      }
+    });
+  } catch (error) {
+    console.error('Get claim status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+// Upload Claim Documents (placeholder for file upload)
+const uploadClaimDocuments = async (req, res) => {
+  try {
+    const { claim_id } = req.params;
+    const { wallet_address, document_type, file_name } = req.body;
+
+    if (!claim_id || !wallet_address || !document_type) {
+      return res.status(400).json({
+        success: false,
+        message: 'Claim ID, wallet address, and document type are required'
+      });
+    }
+
+    const connection = getConnection();
+
+    // Verify claim belongs to user
+    const [claims] = await connection.execute(
+      'SELECT id FROM insurance_claims WHERE claim_id = ? AND wallet_address = ?',
+      [claim_id, wallet_address]
+    );
+
+    if (claims.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Claim not found'
+      });
+    }
+
+    // In a real implementation, you would handle file upload here
+    // For now, we'll simulate the document upload
+    const document_id = crypto.randomBytes(8).toString('hex');
+    const file_path = `/uploads/claims/${claim_id}/${document_id}_${file_name}`;
+
+    // Create claim_documents table entry (if table exists)
+    try {
+      await connection.execute(`
+        INSERT INTO claim_documents (claim_id, document_type, file_path, file_name, uploaded_by)
+        VALUES (?, ?, ?, ?, ?)
+      `, [claim_id, document_type, file_path, file_name, wallet_address]);
+    } catch (tableError) {
+      // Table might not exist yet, create notification instead
+      await connection.execute(`
+        INSERT INTO notifications (wallet_address, type, title, message)
+        VALUES (?, ?, ?, ?)
+      `, [
+        wallet_address,
+        'document_uploaded',
+        'Document Uploaded',
+        `Document uploaded for claim ${claim_id}: ${document_type}`
+      ]);
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Document uploaded successfully',
+      data: {
+        document_id,
+        file_path,
+        document_type,
+        uploaded_at: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('Upload claim documents error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+module.exports = {
+  submitClaim,
+  getUserClaims,
+  getClaimStatus,
+  uploadClaimDocuments
+};
