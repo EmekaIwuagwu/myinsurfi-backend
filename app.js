@@ -8,6 +8,7 @@ const { connectDB } = require('./config/database');
 const insuranceRoutes = require('./routes/insurance');
 const messageRoutes = require('./routes/messages');
 const adminRoutes = require('./routes/admin');
+const userRoutes = require('./routes/user');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -24,6 +25,7 @@ app.set('trust proxy', true);
 app.use('/api/insurance', insuranceRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/user', userRoutes);
 
 // Health check route
 app.get('/health', (req, res) => {
