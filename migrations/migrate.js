@@ -25,7 +25,7 @@ const createTables = async () => {
       )
     `);
 
-    // Car Insurance Table
+    // Car Insurance Table - Updated with coverage_amount and total_premium
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS car_insurance_quotes (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -37,12 +37,14 @@ const createTables = async () => {
         policy_start_date DATE NOT NULL,
         policy_end_date DATE NOT NULL,
         coverage_duration INT NOT NULL,
+        coverage_amount DECIMAL(15,2) NOT NULL,
+        total_premium DECIMAL(15,2) NOT NULL DEFAULT 0.00,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_wallet_address (wallet_address)
       )
     `);
 
-    // Travel Insurance Table
+    // Travel Insurance Table - Updated with coverage_amount and total_premium
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS travel_insurance_quotes (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -55,6 +57,8 @@ const createTables = async () => {
         travel_start_date DATE NOT NULL,
         travel_end_date DATE NOT NULL,
         coverage_duration INT NOT NULL,
+        coverage_amount DECIMAL(15,2) NOT NULL,
+        total_premium DECIMAL(15,2) NOT NULL DEFAULT 0.00,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_wallet_address (wallet_address)
       )
@@ -94,6 +98,8 @@ const createTables = async () => {
     `);
 
     console.log('All tables created successfully!');
+    console.log('✅ Car insurance table now includes coverage_amount and total_premium');
+    console.log('✅ Travel insurance table now includes coverage_amount and total_premium');
     process.exit(0);
   } catch (error) {
     console.error('Migration failed:', error);

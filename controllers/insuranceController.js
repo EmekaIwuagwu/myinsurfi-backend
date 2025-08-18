@@ -1,6 +1,6 @@
 const { getConnection } = require('../config/database');
 
-// Create Home Insurance Quote
+// Create Home Insurance Quote (unchanged)
 const createHomeInsuranceQuote = async (req, res) => {
   try {
     const {
@@ -19,14 +19,14 @@ const createHomeInsuranceQuote = async (req, res) => {
     } = req.body;
 
     if (!wallet_address) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Wallet address is required' 
+      return res.status(400).json({
+        success: false,
+        message: 'Wallet address is required'
       });
     }
 
     const connection = getConnection();
-    
+
     const [result] = await connection.execute(
       `INSERT INTO home_insurance_quotes 
        (wallet_address, house_type, year_built, house_address, property_owner_name, 
@@ -34,16 +34,16 @@ const createHomeInsuranceQuote = async (req, res) => {
         coverage_duration, coverage_amount, total_premium) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [wallet_address, house_type, year_built, house_address, property_owner_name,
-       property_owner_telephone, property_owner_email, policy_start_date, policy_end_date,
-       coverage_duration, coverage_amount, total_premium]
+        property_owner_telephone, property_owner_email, policy_start_date, policy_end_date,
+        coverage_duration, coverage_amount, total_premium]
     );
 
     // Create notification
     await connection.execute(
       `INSERT INTO notifications (wallet_address, type, title, message) 
        VALUES (?, ?, ?, ?)`,
-      [wallet_address, 'home_insurance', 'Home Insurance Quote Created', 
-       'Your home insurance quote has been successfully created.']
+      [wallet_address, 'home_insurance', 'Home Insurance Quote Created',
+        'Your home insurance quote has been successfully created.']
     );
 
     res.status(201).json({
@@ -61,7 +61,7 @@ const createHomeInsuranceQuote = async (req, res) => {
   }
 };
 
-// Create Car Insurance Quote
+// Create Car Insurance Quote - UPDATED WITH COVERAGE_AMOUNT
 const createCarInsuranceQuote = async (req, res) => {
   try {
     const {
@@ -72,39 +72,52 @@ const createCarInsuranceQuote = async (req, res) => {
       mileage,
       policy_start_date,
       policy_end_date,
-      coverage_duration
+      coverage_duration,
+      coverage_amount,    // NEW PARAMETER
+      total_premium       // NEW PARAMETER
     } = req.body;
 
     if (!wallet_address) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Wallet address is required' 
+      return res.status(400).json({
+        success: false,
+        message: 'Wallet address is required'
+      });
+    }
+
+    if (!coverage_amount) {
+      return res.status(400).json({
+        success: false,
+        message: 'Coverage amount is required'
       });
     }
 
     const connection = getConnection();
-    
+
     const [result] = await connection.execute(
       `INSERT INTO car_insurance_quotes 
        (wallet_address, car_make, car_model, car_year, mileage, 
-        policy_start_date, policy_end_date, coverage_duration) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        policy_start_date, policy_end_date, coverage_duration, coverage_amount, total_premium) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [wallet_address, car_make, car_model, car_year, mileage,
-       policy_start_date, policy_end_date, coverage_duration]
+        policy_start_date, policy_end_date, coverage_duration, coverage_amount, total_premium || 0]
     );
 
     // Create notification
     await connection.execute(
       `INSERT INTO notifications (wallet_address, type, title, message) 
        VALUES (?, ?, ?, ?)`,
-      [wallet_address, 'car_insurance', 'Car Insurance Quote Created', 
-       'Your car insurance quote has been successfully created.']
+      [wallet_address, 'car_insurance', 'Car Insurance Quote Created',
+        'Your car insurance quote has been successfully created.']
     );
 
     res.status(201).json({
       success: true,
       message: 'Car insurance quote created successfully',
-      data: { id: result.insertId }
+      data: {
+        id: result.insertId,
+        coverage_amount: coverage_amount,
+        total_premium: total_premium || 0
+      }
     });
   } catch (error) {
     console.error('Error creating car insurance quote:', error);
@@ -116,7 +129,7 @@ const createCarInsuranceQuote = async (req, res) => {
   }
 };
 
-// Create Travel Insurance Quote
+// Create Travel Insurance Quote - UPDATED WITH COVERAGE_AMOUNT
 const createTravelInsuranceQuote = async (req, res) => {
   try {
     const {
@@ -128,39 +141,52 @@ const createTravelInsuranceQuote = async (req, res) => {
       passport_country,
       travel_start_date,
       travel_end_date,
-      coverage_duration
+      coverage_duration,
+      coverage_amount,    // NEW PARAMETER
+      total_premium       // NEW PARAMETER
     } = req.body;
 
     if (!wallet_address) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Wallet address is required' 
+      return res.status(400).json({
+        success: false,
+        message: 'Wallet address is required'
+      });
+    }
+
+    if (!coverage_amount) {
+      return res.status(400).json({
+        success: false,
+        message: 'Coverage amount is required'
       });
     }
 
     const connection = getConnection();
-    
+
     const [result] = await connection.execute(
       `INSERT INTO travel_insurance_quotes 
        (wallet_address, origin, departure, destination, passport_number, 
-        passport_country, travel_start_date, travel_end_date, coverage_duration) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        passport_country, travel_start_date, travel_end_date, coverage_duration, coverage_amount, total_premium) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [wallet_address, origin, departure, destination, passport_number,
-       passport_country, travel_start_date, travel_end_date, coverage_duration]
+        passport_country, travel_start_date, travel_end_date, coverage_duration, coverage_amount, total_premium || 0]
     );
 
     // Create notification
     await connection.execute(
       `INSERT INTO notifications (wallet_address, type, title, message) 
        VALUES (?, ?, ?, ?)`,
-      [wallet_address, 'travel_insurance', 'Travel Insurance Quote Created', 
-       'Your travel insurance quote has been successfully created.']
+      [wallet_address, 'travel_insurance', 'Travel Insurance Quote Created',
+        'Your travel insurance quote has been successfully created.']
     );
 
     res.status(201).json({
       success: true,
       message: 'Travel insurance quote created successfully',
-      data: { id: result.insertId }
+      data: {
+        id: result.insertId,
+        coverage_amount: coverage_amount,
+        total_premium: total_premium || 0
+      }
     });
   } catch (error) {
     console.error('Error creating travel insurance quote:', error);
@@ -172,20 +198,20 @@ const createTravelInsuranceQuote = async (req, res) => {
   }
 };
 
-// Get Active Policies
+// Get Active Policies - UPDATED TO INCLUDE COVERAGE_AMOUNT
 const getActivePolicies = async (req, res) => {
   try {
     const { wallet_address } = req.params;
 
     if (!wallet_address) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Wallet address is required' 
+      return res.status(400).json({
+        success: false,
+        message: 'Wallet address is required'
       });
     }
 
     const connection = getConnection();
-    
+
     // Union query to get all policies
     const [policies] = await connection.execute(
       `(SELECT 
@@ -199,7 +225,7 @@ const getActivePolicies = async (req, res) => {
        (SELECT 
          id, wallet_address, 'car' as policy_type,
          CONCAT(car_make, ' ', car_model) as detail_1, car_year as detail_2,
-         NULL as amount, NULL as premium,
+         coverage_amount as amount, total_premium as premium,
          policy_start_date, policy_end_date, created_at
        FROM car_insurance_quotes 
        WHERE wallet_address = ?)
@@ -207,7 +233,7 @@ const getActivePolicies = async (req, res) => {
        (SELECT 
          id, wallet_address, 'travel' as policy_type,
          CONCAT(origin, ' to ', destination) as detail_1, passport_country as detail_2,
-         NULL as amount, NULL as premium,
+         coverage_amount as amount, total_premium as premium,
          travel_start_date as policy_start_date, travel_end_date as policy_end_date, created_at
        FROM travel_insurance_quotes 
        WHERE wallet_address = ?)
