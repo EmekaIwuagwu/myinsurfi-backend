@@ -1,130 +1,188 @@
 const { getConnection } = require('../config/database');
-const crypto = require('crypto');
+const multer = require('multer');
 
-// Submit Insurance Claim
-const submitClaim = async (req, res) => {
-  try {
-    const {
-      wallet_address,
-      policy_type,
-      policy_id,
-      claim_amount,
-      description,
-      incident_date,
-      documents = [] // Array of base64 files from frontend
-    } = req.body;
-
-    if (!wallet_address || !policy_type || !policy_id || !claim_amount || !description || !incident_date) {
-      return res.status(400).json({
-        success: false,
-        message: 'All required fields must be provided'
-      });
+// Configure multer for memory storage
+const storage = multer.memoryStorage();
+const upload = multer({ 
+  storage: storage,
+  limits: { 
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+    files: 10 // Max 10 files
+  },
+  fileFilter: (req, file, cb) => {
+    // Allow common file types
+    const allowedMimes = [
+      'image/jpeg',
+      'image/png', 
+      'image/gif',
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'text/plain'
+    ];
+    
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only images, PDFs, and documents are allowed.'));
     }
-
-    // Validate policy_type
-    if (!['home', 'car', 'travel'].includes(policy_type)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid policy type. Must be home, car, or travel'
-      });
-    }
-
-    const connection = getConnection();
-
-    // Generate unique claim ID
-    const timestamp = Date.now();
-    const claim_id = `CLM-${timestamp.toString().slice(-6)}`;
-
-    // Verify policy exists and belongs to user
-    const tables = {
-      'home': 'home_insurance_quotes',
-      'car': 'car_insurance_quotes', 
-      'travel': 'travel_insurance_quotes'
-    };
-
-    const [policyCheck] = await connection.execute(
-      `SELECT id FROM ${tables[policy_type]} WHERE id = ? AND wallet_address = ?`,
-      [policy_id, wallet_address]
-    );
-
-    if (policyCheck.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Policy not found or does not belong to this wallet'
-      });
-    }
-
-    // Insert claim
-    const [result] = await connection.execute(`
-      INSERT INTO insurance_claims 
-      (claim_id, wallet_address, policy_type, policy_id, claim_amount, description, 
-       incident_date, documents_count, status) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-    `, [claim_id, wallet_address, policy_type, policy_id, claim_amount, description, 
-        incident_date, documents.length]);
-
-    // Store documents as base64 TEXT
-    if (documents && documents.length > 0) {
-      for (const doc of documents) {
-        await connection.execute(`
-          INSERT INTO claim_documents 
-          (claim_id, document_type, file_name, file_data, file_size, mime_type, uploaded_by)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `, [
-          claim_id,
-          doc.type || 'supporting_document',
-          doc.name,
-          doc.data, // Base64 string
-          doc.size || 0,
-          doc.mimeType || 'application/octet-stream',
-          wallet_address
-        ]);
-      }
-    }
-
-    // Create notification for user
-    await connection.execute(`
-      INSERT INTO notifications (wallet_address, type, title, message)
-      VALUES (?, ?, ?, ?)
-    `, [
-      wallet_address,
-      'claim_submitted',
-      'Claim Submitted Successfully',
-      `Your claim ${claim_id} has been submitted and is being reviewed.`
-    ]);
-
-    // Create notification for admin (using a system wallet address)
-    await connection.execute(`
-      INSERT INTO notifications (wallet_address, type, title, message)
-      VALUES (?, ?, ?, ?)
-    `, [
-      'admin',
-      'new_claim',
-      'New Claim Submitted',
-      `New ${policy_type} insurance claim ${claim_id} submitted by ${wallet_address.slice(0, 8)}...`
-    ]);
-
-    res.status(201).json({
-      success: true,
-      message: 'Claim submitted successfully',
-      data: {
-        claim_id,
-        status: 'pending',
-        submitted_at: new Date().toISOString(),
-        documents_uploaded: documents.length
-      }
-    });
-  } catch (error) {
-    console.error('Submit claim error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
   }
-};
+});
 
-// Get User Claims
+// Submit Insurance Claim with File Upload
+const submitClaimWithFiles = [
+  upload.array('documents', 10), // Handle up to 10 files with field name 'documents'
+  async (req, res) => {
+    try {
+      const {
+        wallet_address,
+        policy_type,
+        policy_id,
+        claim_amount,
+        description,
+        incident_date
+      } = req.body;
+
+      // Get uploaded files
+      const uploadedFiles = req.files || [];
+
+      if (!wallet_address || !policy_type || !policy_id || !claim_amount || !description || !incident_date) {
+        return res.status(400).json({
+          success: false,
+          message: 'All required fields must be provided'
+        });
+      }
+
+      // Validate policy_type
+      if (!['home', 'car', 'travel'].includes(policy_type)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid policy type. Must be home, car, or travel'
+        });
+      }
+
+      const connection = getConnection();
+
+      // Generate unique claim ID
+      const timestamp = Date.now();
+      const claim_id = `CLM-${timestamp.toString().slice(-6)}`;
+
+      // Verify policy exists and belongs to user
+      const tables = {
+        'home': 'home_insurance_quotes',
+        'car': 'car_insurance_quotes', 
+        'travel': 'travel_insurance_quotes'
+      };
+
+      const [policyCheck] = await connection.execute(
+        `SELECT id FROM ${tables[policy_type]} WHERE id = ? AND wallet_address = ?`,
+        [policy_id, wallet_address]
+      );
+
+      if (policyCheck.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Policy not found or does not belong to this wallet'
+        });
+      }
+
+      // Insert claim
+      const [result] = await connection.execute(`
+        INSERT INTO insurance_claims 
+        (claim_id, wallet_address, policy_type, policy_id, claim_amount, description, 
+         incident_date, documents_count, status) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+      `, [claim_id, wallet_address, policy_type, policy_id, claim_amount, description, 
+          incident_date, uploadedFiles.length]);
+
+      // Store uploaded files as base64 in database
+      if (uploadedFiles && uploadedFiles.length > 0) {
+        for (const file of uploadedFiles) {
+          // Convert file buffer to base64
+          const base64Data = file.buffer.toString('base64');
+          
+          await connection.execute(`
+            INSERT INTO claim_documents 
+            (claim_id, document_type, file_name, file_data, file_size, mime_type, uploaded_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+          `, [
+            claim_id,
+            'supporting_document',
+            file.originalname,
+            base64Data, // Store as base64
+            file.size,
+            file.mimetype,
+            wallet_address
+          ]);
+        }
+      }
+
+      // Create notification for user
+      await connection.execute(`
+        INSERT INTO notifications (wallet_address, type, title, message)
+        VALUES (?, ?, ?, ?)
+      `, [
+        wallet_address,
+        'claim_submitted',
+        'Claim Submitted Successfully',
+        `Your claim ${claim_id} has been submitted and is being reviewed.`
+      ]);
+
+      // Create notification for admin
+      await connection.execute(`
+        INSERT INTO notifications (wallet_address, type, title, message)
+        VALUES (?, ?, ?, ?)
+      `, [
+        'admin',
+        'new_claim',
+        'New Claim Submitted',
+        `New ${policy_type} insurance claim ${claim_id} submitted by ${wallet_address.slice(0, 8)}...`
+      ]);
+
+      res.status(201).json({
+        success: true,
+        message: 'Claim submitted successfully',
+        data: {
+          claim_id,
+          status: 'pending',
+          submitted_at: new Date().toISOString(),
+          documents_uploaded: uploadedFiles.length,
+          files_info: uploadedFiles.map(file => ({
+            name: file.originalname,
+            size: file.size,
+            type: file.mimetype
+          }))
+        }
+      });
+    } catch (error) {
+      console.error('Submit claim with files error:', error);
+      
+      // Handle multer errors
+      if (error instanceof multer.MulterError) {
+        if (error.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({
+            success: false,
+            message: 'File too large. Maximum size is 10MB per file.'
+          });
+        }
+        if (error.code === 'LIMIT_FILE_COUNT') {
+          return res.status(400).json({
+            success: false,
+            message: 'Too many files. Maximum 10 files allowed.'
+          });
+        }
+      }
+      
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error',
+        error: error.message
+      });
+    }
+  }
+];
+
+// Get User Claims (keep existing)
 const getUserClaims = async (req, res) => {
   try {
     const { wallet_address } = req.params;
@@ -211,7 +269,7 @@ const getUserClaims = async (req, res) => {
   }
 };
 
-// Get Claim Status
+// Get Claim Status (keep existing)
 const getClaimStatus = async (req, res) => {
   try {
     const { claim_id } = req.params;
@@ -335,7 +393,7 @@ const getClaimStatus = async (req, res) => {
   }
 };
 
-// Upload Claim Documents (placeholder for file upload)
+// Upload additional documents
 const uploadClaimDocuments = async (req, res) => {
   try {
     const { claim_id } = req.params;
@@ -408,7 +466,7 @@ const uploadClaimDocuments = async (req, res) => {
 };
 
 module.exports = {
-  submitClaim,
+  submitClaimWithFiles, // NEW: Main function for file uploads
   getUserClaims,
   getClaimStatus,
   uploadClaimDocuments

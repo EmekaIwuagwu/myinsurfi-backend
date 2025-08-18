@@ -1,14 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const {
-  submitClaim,
+  submitClaimWithFiles, // Updated import
   getUserClaims,
   getClaimStatus,
   uploadClaimDocuments
 } = require('../controllers/userClaimsController');
 
-// Submit new claim (with documents)
-router.post('/submit', submitClaim);
+// Submit new claim with file uploads
+router.post('/submit', submitClaimWithFiles); // This now handles file uploads
 
 // Get user's claims with pagination and filtering
 router.get('/:wallet_address', getUserClaims);
