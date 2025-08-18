@@ -184,101 +184,115 @@ const submitClaimWithFiles = [
 
 // Get User Claims (keep existing)
 // Get User Claims - SIMPLIFIED VERSION
+// Get User Claims - SIMPLIFIED & FIXED VERSION
 const getUserClaims = async (req, res) => {
-    try {
-        const { wallet_address } = req.params;
-        const { page = 1, limit = 10, status = 'all' } = req.query;
+  try {
+    const { wallet_address } = req.params;
+    const { page = 1, limit = 10, status = 'all' } = req.query;
 
-        if (!wallet_address) {
-            return res.status(400).json({
-                success: false,
-                message: 'Wallet address is required'
-            });
-        }
-
-        const connection = getConnection();
-        const offset = (parseInt(page) - 1) * parseInt(limit);
-
-        // Simple query without complex parameter building
-        let claimsQuery = `
-      SELECT 
-        claim_id,
-        policy_type,
-        claim_amount,
-        description,
-        incident_date,
-        status,
-        created_at,
-        payout_amount,
-        payout_date,
-        admin_notes
-      FROM insurance_claims
-      WHERE wallet_address = ?
-    `;
-
-        let countQuery = `
-      SELECT COUNT(*) as total
-      FROM insurance_claims
-      WHERE wallet_address = ?
-    `;
-
-        let queryParams = [wallet_address];
-
-        // Add status filter if specified
-        if (status !== 'all') {
-            claimsQuery += ' AND status = ?';
-            countQuery += ' AND status = ?';
-            queryParams.push(status);
-        }
-
-        // Add ordering and pagination
-        claimsQuery += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
-
-        // Execute queries
-        const [claims] = await connection.execute(claimsQuery, [
-            ...queryParams,
-            parseInt(limit),
-            offset
-        ]);
-
-        const [countResult] = await connection.execute(countQuery, queryParams);
-
-        // Format claims
-        const formattedClaims = claims.map(claim => ({
-            ...claim,
-            formatted_amount: parseFloat(claim.claim_amount || 0).toLocaleString('en-US', {
-                style: 'currency',
-                currency: 'USD'
-            }),
-            formatted_payout: claim.payout_amount ? parseFloat(claim.payout_amount).toLocaleString('en-US', {
-                style: 'currency',
-                currency: 'USD'
-            }) : null,
-            days_since_submission: Math.floor((new Date() - new Date(claim.created_at)) / (1000 * 60 * 60 * 24))
-        }));
-
-        res.json({
-            success: true,
-            data: {
-                claims: formattedClaims,
-                pagination: {
-                    current_page: parseInt(page),
-                    total_pages: Math.ceil(countResult[0].total / parseInt(limit)),
-                    total_claims: countResult[0].total,
-                    per_page: parseInt(limit)
-                }
-            }
-        });
-    } catch (error) {
-        console.error('Get user claims error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error',
-            error: error.message
-        });
+    if (!wallet_address) {
+      return res.status(400).json({
+        success: false,
+        message: 'Wallet address is required'
+      });
     }
-};
 
+    const connection = getConnection();
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    let claims, countResult;
+
+    if (status === 'all') {
+      // Get all claims for user
+      [claims] = await connection.execute(`
+        SELECT 
+          claim_id,
+          policy_type,
+          claim_amount,
+          description,
+          incident_date,
+          status,
+          created_at,
+          payout_amount,
+          payout_date,
+          admin_notes
+        FROM insurance_claims
+        WHERE wallet_address = ?
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+      `, [wallet_address, parseInt(limit), offset]);
+
+      // Get total count
+      [countResult] = await connection.execute(`
+        SELECT COUNT(*) as total
+        FROM insurance_claims
+        WHERE wallet_address = ?
+      `, [wallet_address]);
+
+    } else {
+      // Get filtered claims by status
+      [claims] = await connection.execute(`
+        SELECT 
+          claim_id,
+          policy_type,
+          claim_amount,
+          description,
+          incident_date,
+          status,
+          created_at,
+          payout_amount,
+          payout_date,
+          admin_notes
+        FROM insurance_claims
+        WHERE wallet_address = ? AND status = ?
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+      `, [wallet_address, status, parseInt(limit), offset]);
+
+      // Get total count with filter
+      [countResult] = await connection.execute(`
+        SELECT COUNT(*) as total
+        FROM insurance_claims
+        WHERE wallet_address = ? AND status = ?
+      `, [wallet_address, status]);
+    }
+
+    // Format claims
+    const formattedClaims = claims.map(claim => ({
+      ...claim,
+      formatted_amount: parseFloat(claim.claim_amount).toLocaleString('en-US', {
+        style: 'currency',
+        currency: 'USD'
+      }),
+      formatted_payout: claim.payout_amount ? parseFloat(claim.payout_amount).toLocaleString('en-US', {
+        style: 'currency',
+        currency: 'USD'
+      }) : null,
+      days_since_submission: Math.floor((new Date() - new Date(claim.created_at)) / (1000 * 60 * 60 * 24))
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        claims: formattedClaims,
+        pagination: {
+          current_page: parseInt(page),
+          total_pages: Math.ceil(countResult[0].total / parseInt(limit)),
+          total_claims: countResult[0].total,
+          per_page: parseInt(limit)
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get user claims error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
 // Get Claim Status (keep existing)
 const getClaimStatus = async (req, res) => {
     try {
