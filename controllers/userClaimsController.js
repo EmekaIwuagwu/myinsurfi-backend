@@ -198,69 +198,40 @@ const getUserClaims = async (req, res) => {
     }
 
     const connection = getConnection();
-    const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    let claims, countResult;
+    // Step 1: Get all claims for this wallet first
+    let baseQuery = 'SELECT * FROM insurance_claims WHERE wallet_address = ?';
+    let params = [wallet_address];
 
-    if (status === 'all') {
-      // Get all claims for user
-      [claims] = await connection.execute(`
-        SELECT 
-          claim_id,
-          policy_type,
-          claim_amount,
-          description,
-          incident_date,
-          status,
-          created_at,
-          payout_amount,
-          payout_date,
-          admin_notes
-        FROM insurance_claims
-        WHERE wallet_address = ?
-        ORDER BY created_at DESC
-        LIMIT ? OFFSET ?
-      `, [wallet_address, parseInt(limit), offset]);
-
-      // Get total count
-      [countResult] = await connection.execute(`
-        SELECT COUNT(*) as total
-        FROM insurance_claims
-        WHERE wallet_address = ?
-      `, [wallet_address]);
-
-    } else {
-      // Get filtered claims by status
-      [claims] = await connection.execute(`
-        SELECT 
-          claim_id,
-          policy_type,
-          claim_amount,
-          description,
-          incident_date,
-          status,
-          created_at,
-          payout_amount,
-          payout_date,
-          admin_notes
-        FROM insurance_claims
-        WHERE wallet_address = ? AND status = ?
-        ORDER BY created_at DESC
-        LIMIT ? OFFSET ?
-      `, [wallet_address, status, parseInt(limit), offset]);
-
-      // Get total count with filter
-      [countResult] = await connection.execute(`
-        SELECT COUNT(*) as total
-        FROM insurance_claims
-        WHERE wallet_address = ? AND status = ?
-      `, [wallet_address, status]);
+    // Step 2: Add status filter if needed
+    if (status !== 'all') {
+      baseQuery += ' AND status = ?';
+      params.push(status);
     }
 
-    // Format claims
-    const formattedClaims = claims.map(claim => ({
-      ...claim,
-      formatted_amount: parseFloat(claim.claim_amount).toLocaleString('en-US', {
+    baseQuery += ' ORDER BY created_at DESC';
+
+    // Execute the query
+    const [allClaims] = await connection.execute(baseQuery, params);
+
+    // Step 3: Handle pagination in JavaScript (simpler than SQL)
+    const startIndex = (parseInt(page) - 1) * parseInt(limit);
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedClaims = allClaims.slice(startIndex, endIndex);
+
+    // Step 4: Format the results
+    const formattedClaims = paginatedClaims.map(claim => ({
+      claim_id: claim.claim_id,
+      policy_type: claim.policy_type,
+      claim_amount: claim.claim_amount.toString(),
+      description: claim.description,
+      incident_date: claim.incident_date,
+      status: claim.status,
+      created_at: claim.created_at,
+      payout_amount: claim.payout_amount,
+      payout_date: claim.payout_date,
+      admin_notes: claim.admin_notes,
+      formatted_amount: parseFloat(claim.claim_amount || 0).toLocaleString('en-US', {
         style: 'currency',
         currency: 'USD'
       }),
@@ -271,14 +242,18 @@ const getUserClaims = async (req, res) => {
       days_since_submission: Math.floor((new Date() - new Date(claim.created_at)) / (1000 * 60 * 60 * 24))
     }));
 
+    // Step 5: Calculate pagination info
+    const totalClaims = allClaims.length;
+    const totalPages = Math.ceil(totalClaims / parseInt(limit));
+
     res.json({
       success: true,
       data: {
         claims: formattedClaims,
         pagination: {
           current_page: parseInt(page),
-          total_pages: Math.ceil(countResult[0].total / parseInt(limit)),
-          total_claims: countResult[0].total,
+          total_pages: totalPages,
+          total_claims: totalClaims,
           per_page: parseInt(limit)
         }
       }
