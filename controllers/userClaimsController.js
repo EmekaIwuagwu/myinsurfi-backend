@@ -1,4 +1,4 @@
-    const { getConnection } = require('../config/database');
+const { getConnection } = require('../config/database');
 const crypto = require('crypto');
 
 // Submit Insurance Claim
@@ -11,14 +11,48 @@ const submitClaim = async (req, res) => {
       claim_amount,
       description,
       incident_date,
-      documents // Array of base64 encoded files
+      documents = [] // Array of base64 files from frontend
     } = req.body;
 
-    // Validation...
+    if (!wallet_address || !policy_type || !policy_id || !claim_amount || !description || !incident_date) {
+      return res.status(400).json({
+        success: false,
+        message: 'All required fields must be provided'
+      });
+    }
+
+    // Validate policy_type
+    if (!['home', 'car', 'travel'].includes(policy_type)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid policy type. Must be home, car, or travel'
+      });
+    }
 
     const connection = getConnection();
+
+    // Generate unique claim ID
     const timestamp = Date.now();
     const claim_id = `CLM-${timestamp.toString().slice(-6)}`;
+
+    // Verify policy exists and belongs to user
+    const tables = {
+      'home': 'home_insurance_quotes',
+      'car': 'car_insurance_quotes', 
+      'travel': 'travel_insurance_quotes'
+    };
+
+    const [policyCheck] = await connection.execute(
+      `SELECT id FROM ${tables[policy_type]} WHERE id = ? AND wallet_address = ?`,
+      [policy_id, wallet_address]
+    );
+
+    if (policyCheck.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Policy not found or does not belong to this wallet'
+      });
+    }
 
     // Insert claim
     const [result] = await connection.execute(`
@@ -27,27 +61,66 @@ const submitClaim = async (req, res) => {
        incident_date, documents_count, status) 
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
     `, [claim_id, wallet_address, policy_type, policy_id, claim_amount, description, 
-        incident_date, documents?.length || 0]);
+        incident_date, documents.length]);
 
-    // Save documents if provided
+    // Store documents as base64 TEXT
     if (documents && documents.length > 0) {
       for (const doc of documents) {
         await connection.execute(`
           INSERT INTO claim_documents 
-          (claim_id, document_type, file_name, file_data, file_size, uploaded_by)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `, [claim_id, doc.type, doc.name, doc.data, doc.size, wallet_address]);
+          (claim_id, document_type, file_name, file_data, file_size, mime_type, uploaded_by)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [
+          claim_id,
+          doc.type || 'supporting_document',
+          doc.name,
+          doc.data, // Base64 string
+          doc.size || 0,
+          doc.mimeType || 'application/octet-stream',
+          wallet_address
+        ]);
       }
     }
 
-    // Rest of the function...
+    // Create notification for user
+    await connection.execute(`
+      INSERT INTO notifications (wallet_address, type, title, message)
+      VALUES (?, ?, ?, ?)
+    `, [
+      wallet_address,
+      'claim_submitted',
+      'Claim Submitted Successfully',
+      `Your claim ${claim_id} has been submitted and is being reviewed.`
+    ]);
+
+    // Create notification for admin (using a system wallet address)
+    await connection.execute(`
+      INSERT INTO notifications (wallet_address, type, title, message)
+      VALUES (?, ?, ?, ?)
+    `, [
+      'admin',
+      'new_claim',
+      'New Claim Submitted',
+      `New ${policy_type} insurance claim ${claim_id} submitted by ${wallet_address.slice(0, 8)}...`
+    ]);
+
     res.status(201).json({
       success: true,
       message: 'Claim submitted successfully',
-      data: { claim_id, status: 'pending', submitted_at: new Date().toISOString() }
+      data: {
+        claim_id,
+        status: 'pending',
+        submitted_at: new Date().toISOString(),
+        documents_uploaded: documents.length
+      }
     });
   } catch (error) {
-    // Error handling...
+    console.error('Submit claim error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
   }
 };
 
@@ -266,12 +339,12 @@ const getClaimStatus = async (req, res) => {
 const uploadClaimDocuments = async (req, res) => {
   try {
     const { claim_id } = req.params;
-    const { wallet_address, document_type, file_name } = req.body;
+    const { wallet_address, document_type, file_name, file_data, file_size, mime_type } = req.body;
 
-    if (!claim_id || !wallet_address || !document_type) {
+    if (!claim_id || !wallet_address || !document_type || !file_data) {
       return res.status(400).json({
         success: false,
-        message: 'Claim ID, wallet address, and document type are required'
+        message: 'Claim ID, wallet address, document type, and file data are required'
       });
     }
 
@@ -290,36 +363,36 @@ const uploadClaimDocuments = async (req, res) => {
       });
     }
 
-    // In a real implementation, you would handle file upload here
-    // For now, we'll simulate the document upload
-    const document_id = crypto.randomBytes(8).toString('hex');
-    const file_path = `/uploads/claims/${claim_id}/${document_id}_${file_name}`;
+    // Insert document
+    const [result] = await connection.execute(`
+      INSERT INTO claim_documents (claim_id, document_type, file_name, file_data, file_size, mime_type, uploaded_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [claim_id, document_type, file_name, file_data, file_size || 0, mime_type || 'application/octet-stream', wallet_address]);
 
-    // Create claim_documents table entry (if table exists)
-    try {
-      await connection.execute(`
-        INSERT INTO claim_documents (claim_id, document_type, file_path, file_name, uploaded_by)
-        VALUES (?, ?, ?, ?, ?)
-      `, [claim_id, document_type, file_path, file_name, wallet_address]);
-    } catch (tableError) {
-      // Table might not exist yet, create notification instead
-      await connection.execute(`
-        INSERT INTO notifications (wallet_address, type, title, message)
-        VALUES (?, ?, ?, ?)
-      `, [
-        wallet_address,
-        'document_uploaded',
-        'Document Uploaded',
-        `Document uploaded for claim ${claim_id}: ${document_type}`
-      ]);
-    }
+    // Update documents count
+    await connection.execute(`
+      UPDATE insurance_claims 
+      SET documents_count = (SELECT COUNT(*) FROM claim_documents WHERE claim_id = ?)
+      WHERE claim_id = ?
+    `, [claim_id, claim_id]);
+
+    // Create notification
+    await connection.execute(`
+      INSERT INTO notifications (wallet_address, type, title, message)
+      VALUES (?, ?, ?, ?)
+    `, [
+      wallet_address,
+      'document_uploaded',
+      'Document Uploaded',
+      `Document uploaded for claim ${claim_id}: ${document_type}`
+    ]);
 
     res.status(201).json({
       success: true,
       message: 'Document uploaded successfully',
       data: {
-        document_id,
-        file_path,
+        document_id: result.insertId,
+        claim_id,
         document_type,
         uploaded_at: new Date().toISOString()
       }

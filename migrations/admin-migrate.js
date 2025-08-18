@@ -130,6 +130,24 @@ const createAdminTables = async () => {
       )
     `);
 
+    // Claim Documents Table for file storage
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS claim_documents (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        claim_id VARCHAR(20) NOT NULL,
+        document_type VARCHAR(50) NOT NULL,
+        file_name VARCHAR(255) NOT NULL,
+        file_data LONGTEXT NOT NULL,
+        file_size INT NOT NULL,
+        mime_type VARCHAR(100) NOT NULL,
+        uploaded_by VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_claim_id (claim_id),
+        INDEX idx_document_type (document_type),
+        FOREIGN KEY (claim_id) REFERENCES insurance_claims(claim_id) ON DELETE CASCADE
+      )
+    `);
+
     // Platform Analytics Table
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS platform_analytics (
@@ -196,6 +214,7 @@ const createAdminTables = async () => {
     }
 
     console.log('All admin tables created successfully!');
+    console.log('✅ claim_documents table created!');
     
     // Insert some sample data for testing
     await insertSampleData(connection);
