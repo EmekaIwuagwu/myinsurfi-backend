@@ -1,12 +1,14 @@
 {
   "name": "myinsurfi-backend",
-  "version": "1.0.0",
-  "description": "Backend for MyInsurFi Blockchain dApp",
+  "version": "2.0.0",
+  "description": "Backend for MyInsurFi Blockchain dApp with Admin Panel",
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
     "dev": "nodemon app.js",
-    "migrate": "node migrations/migrate.js"
+    "migrate": "node migrations/migrate.js",
+    "admin-migrate": "node migrations/admin-migrate.js",
+    "setup": "npm run migrate && npm run admin-migrate"
   },
   "dependencies": {
     "express": "^4.18.2",

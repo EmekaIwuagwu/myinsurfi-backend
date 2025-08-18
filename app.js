@@ -7,6 +7,7 @@ require('dotenv').config();
 const { connectDB } = require('./config/database');
 const insuranceRoutes = require('./routes/insurance');
 const messageRoutes = require('./routes/messages');
+const adminRoutes = require('./routes/admin');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,15 +17,29 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
+// Trust proxy for accurate IP addresses
+app.set('trust proxy', true);
+
 // Routes
 app.use('/api/insurance', insuranceRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Health check route
 app.get('/health', (req, res) => {
   res.json({ 
     success: true, 
     message: 'MyInsurFi Backend is running!',
+    timestamp: new Date().toISOString(),
+    version: '2.0.0'
+  });
+});
+
+// Admin health check
+app.get('/api/admin/health', (req, res) => {
+  res.json({ 
+    success: true, 
+    message: 'MyInsurFi Admin Backend is running!',
     timestamp: new Date().toISOString()
   });
 });
@@ -54,6 +69,7 @@ const startServer = async () => {
     app.listen(PORT, () => {
       console.log(`MyInsurFi Backend running on port ${PORT}`);
       console.log(`Health check: http://localhost:${PORT}/health`);
+      console.log(`Admin health check: http://localhost:${PORT}/api/admin/health`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
