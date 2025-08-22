@@ -28,91 +28,125 @@ const getAllUsers = async (req, res) => {
     const connection = getConnection();
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    // Aggregate user data
     const aggregatedUsers = {};
     
-    // Get home insurance data
-    const [homeData] = await connection.execute(`
-      SELECT 
-        wallet_address,
-        COUNT(*) as policies,
-        SUM(total_premium) as premium,
-        MIN(created_at) as joined_date,
-        MAX(created_at) as last_activity
-      FROM home_insurance_quotes
-      GROUP BY wallet_address
-    `);
-
-    // Get car insurance data  
-    const [carData] = await connection.execute(`
-      SELECT 
-        wallet_address,
-        COUNT(*) as policies,
-        MIN(created_at) as joined_date,
-        MAX(created_at) as last_activity
-      FROM car_insurance_quotes
-      GROUP BY wallet_address
-    `);
-
-    // Get travel insurance data
-    const [travelData] = await connection.execute(`
-      SELECT 
-        wallet_address,
-        COUNT(*) as policies,
-        MIN(created_at) as joined_date,
-        MAX(created_at) as last_activity
-      FROM travel_insurance_quotes
-      GROUP BY wallet_address
-    `);
-
-    // Get claims data
-    const [claimsData] = await connection.execute(`
-      SELECT 
-        wallet_address,
-        COUNT(*) as total_claims
-      FROM insurance_claims
-      GROUP BY wallet_address
-    `);
-
-    // Merge all data
-    [...homeData, ...carData, ...travelData].forEach(item => {
-      const wallet = item.wallet_address;
-      if (!aggregatedUsers[wallet]) {
+    // Get home insurance data with error handling
+    try {
+      const [homeData] = await connection.execute(`
+        SELECT 
+          wallet_address,
+          COUNT(*) as policies,
+          SUM(total_premium) as premium,
+          MIN(created_at) as joined_date,
+          MAX(created_at) as last_activity
+        FROM home_insurance_quotes
+        GROUP BY wallet_address
+      `);
+      
+      homeData.forEach(item => {
+        const wallet = item.wallet_address;
         aggregatedUsers[wallet] = {
           wallet_address: wallet,
           name: generateNameFromWallet(wallet),
           email: generateEmailFromWallet(wallet),
           status: 'Active',
-          total_policies: 0,
-          total_premium: 0,
+          total_policies: item.policies || 0,
+          total_premium: parseFloat(item.premium || 0),
           total_claims: 0,
           joined_date: item.joined_date,
           last_activity: item.last_activity
         };
-      }
-      
-      aggregatedUsers[wallet].total_policies += item.policies || 0;
-      aggregatedUsers[wallet].total_premium += parseFloat(item.premium || 0);
-      
-      // Update earliest join date
-      if (new Date(item.joined_date) < new Date(aggregatedUsers[wallet].joined_date)) {
-        aggregatedUsers[wallet].joined_date = item.joined_date;
-      }
-      
-      // Update latest activity
-      if (new Date(item.last_activity) > new Date(aggregatedUsers[wallet].last_activity)) {
-        aggregatedUsers[wallet].last_activity = item.last_activity;
-      }
-    });
+      });
+    } catch (err) {
+      console.log('Error fetching home insurance data:', err.message);
+    }
 
-    // Add claims data
-    claimsData.forEach(item => {
-      if (aggregatedUsers[item.wallet_address]) {
-        aggregatedUsers[item.wallet_address].total_claims = item.total_claims;
-      }
-    });
+    // Get car insurance data with error handling
+    try {
+      const [carData] = await connection.execute(`
+        SELECT 
+          wallet_address,
+          COUNT(*) as policies,
+          MIN(created_at) as joined_date,
+          MAX(created_at) as last_activity
+        FROM car_insurance_quotes
+        GROUP BY wallet_address
+      `);
+      
+      carData.forEach(item => {
+        const wallet = item.wallet_address;
+        if (!aggregatedUsers[wallet]) {
+          aggregatedUsers[wallet] = {
+            wallet_address: wallet,
+            name: generateNameFromWallet(wallet),
+            email: generateEmailFromWallet(wallet),
+            status: 'Active',
+            total_policies: 0,
+            total_premium: 0,
+            total_claims: 0,
+            joined_date: item.joined_date,
+            last_activity: item.last_activity
+          };
+        }
+        aggregatedUsers[wallet].total_policies += item.policies || 0;
+      });
+    } catch (err) {
+      console.log('Error fetching car insurance data:', err.message);
+    }
 
-    // Convert to array and apply search filter
+    // Get travel insurance data with error handling  
+    try {
+      const [travelData] = await connection.execute(`
+        SELECT 
+          wallet_address,
+          COUNT(*) as policies,
+          MIN(created_at) as joined_date,
+          MAX(created_at) as last_activity
+        FROM travel_insurance_quotes
+        GROUP BY wallet_address
+      `);
+      
+      travelData.forEach(item => {
+        const wallet = item.wallet_address;
+        if (!aggregatedUsers[wallet]) {
+          aggregatedUsers[wallet] = {
+            wallet_address: wallet,
+            name: generateNameFromWallet(wallet),
+            email: generateEmailFromWallet(wallet),
+            status: 'Active',
+            total_policies: 0,
+            total_premium: 0,
+            total_claims: 0,
+            joined_date: item.joined_date,
+            last_activity: item.last_activity
+          };
+        }
+        aggregatedUsers[wallet].total_policies += item.policies || 0;
+      });
+    } catch (err) {
+      console.log('Error fetching travel insurance data:', err.message);
+    }
+
+    // Get claims data with error handling
+    try {
+      const [claimsData] = await connection.execute(`
+        SELECT 
+          wallet_address,
+          COUNT(*) as total_claims
+        FROM insurance_claims
+        GROUP BY wallet_address
+      `);
+      
+      claimsData.forEach(item => {
+        if (aggregatedUsers[item.wallet_address]) {
+          aggregatedUsers[item.wallet_address].total_claims = item.total_claims;
+        }
+      });
+    } catch (err) {
+      console.log('Error fetching claims data:', err.message);
+    }
+
+    // Rest of your code stays the same...
     let userList = Object.values(aggregatedUsers);
     
     if (search) {
@@ -123,7 +157,6 @@ const getAllUsers = async (req, res) => {
       );
     }
 
-    // Sort users
     userList.sort((a, b) => {
       const aValue = a[sortBy];
       const bValue = b[sortBy];
@@ -135,7 +168,6 @@ const getAllUsers = async (req, res) => {
       }
     });
 
-    // Apply pagination
     const totalUsers = userList.length;
     const paginatedUsers = userList.slice(offset, offset + parseInt(limit));
 
