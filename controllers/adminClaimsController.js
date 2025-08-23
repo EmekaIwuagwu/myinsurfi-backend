@@ -3,6 +3,9 @@ const { getConnection } = require('../config/database');
 // Get All Claims
 const getAllClaims = async (req, res) => {
     try {
+        console.log('=== DEBUG: Starting getAllClaims ===');
+        console.log('Raw query params:', req.query);
+
         const {
             page = 1,
             limit = 10,
@@ -12,29 +15,21 @@ const getAllClaims = async (req, res) => {
             sortOrder = 'DESC'
         } = req.query;
 
+        console.log('Parsed params:', { page, limit, status, policy_type, sortBy, sortOrder });
+
         const connection = getConnection();
-
-        // FIXED: Ensure page and limit are valid numbers before calculating offset
-        const pageNum = Math.max(1, parseInt(page) || 1);
-        const limitNum = Math.max(1, parseInt(limit) || 10);
+        
+        // Validate and convert numbers
+        const pageNum = parseInt(page);
+        const limitNum = parseInt(limit);
         const offsetNum = (pageNum - 1) * limitNum;
-
-        // FIXED: Validate and map sortBy parameters to actual database columns
-        const validColumns = {
-            'created_at': 'c.created_at',
-            'submitted_date': 'c.created_at', // Map submitted_date to created_at
-            'claim_amount': 'c.claim_amount',
-            'status': 'c.status',
-            'policy_type': 'c.policy_type',
-            'incident_date': 'c.incident_date',
-            'reviewed_at': 'c.reviewed_at'
-        };
-
-        // Use default if sortBy is invalid
-        const actualSortColumn = validColumns[sortBy] || validColumns['created_at'];
-
-        // Validate sort order
-        const validSortOrder = ['ASC', 'DESC'].includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC';
+        
+        console.log('Calculated numbers:', { pageNum, limitNum, offsetNum });
+        console.log('Are numbers valid?', { 
+            pageValid: !isNaN(pageNum), 
+            limitValid: !isNaN(limitNum), 
+            offsetValid: !isNaN(offsetNum) 
+        });
 
         // Build filters
         let statusFilter = '';
@@ -51,71 +46,81 @@ const getAllClaims = async (req, res) => {
             queryParams.push(policy_type);
         }
 
-        // FIXED: Ensure parameters are valid numbers
-        console.log('Query params debug:', {
-            queryParams,
-            limitNum,
-            offsetNum,
-            statusFilter,
-            typeFilter
-        });
+        console.log('Filters:', { statusFilter, typeFilter, queryParams });
 
-        // Get claims with customer info - FIXED: Use proper parameter handling
-        const claimsQueryParams = [...queryParams, limitNum, offsetNum];
+        // SIMPLE TEST QUERY FIRST - let's see if basic query works
+        console.log('=== Testing basic query first ===');
+        try {
+            const [basicTest] = await connection.execute(`
+                SELECT COUNT(*) as total FROM insurance_claims
+            `);
+            console.log('Basic query success:', basicTest);
+        } catch (basicError) {
+            console.error('Basic query failed:', basicError);
+            throw basicError;
+        }
 
-        const [claims] = await connection.execute(`
+        // Now try with parameters
+        const finalParams = [...queryParams, limitNum, offsetNum];
+        console.log('Final parameters array:', finalParams);
+        console.log('Parameter types:', finalParams.map(p => typeof p));
+        console.log('Parameter values:', finalParams);
+
+        const query = `
             SELECT 
                 c.*,
                 a.name as reviewed_by_name
             FROM insurance_claims c
             LEFT JOIN admin_users a ON c.reviewed_by = a.id
             WHERE 1=1 ${statusFilter} ${typeFilter}
-            ORDER BY ${actualSortColumn} ${validSortOrder}
+            ORDER BY c.created_at DESC
             LIMIT ? OFFSET ?
-        `, claimsQueryParams);
+        `;
 
-        // Get total count for pagination
-        const [countResult] = await connection.execute(`
-            SELECT COUNT(*) as total
-            FROM insurance_claims c
-            WHERE 1=1 ${statusFilter} ${typeFilter}
-        `, queryParams);
+        console.log('Final query:', query);
+        console.log('About to execute with params:', finalParams);
 
-        // Enhance claims with customer info
-        const { generateNameFromWallet } = require('./adminUserController');
+        const [claims] = await connection.execute(query, finalParams);
 
-        const enhancedClaims = claims.map(claim => ({
-            ...claim,
-            customer: generateNameFromWallet(claim.wallet_address),
-            formatted_wallet: `${claim.wallet_address.slice(0, 6)}...${claim.wallet_address.slice(-4)}`,
-            formatted_amount: parseFloat(claim.claim_amount).toLocaleString('en-US', {
-                style: 'currency',
-                currency: 'USD'
-            }),
-            estimated_payout: claim.payout_amount ? parseFloat(claim.payout_amount).toLocaleString('en-US', {
-                style: 'currency',
-                currency: 'USD'
-            }) : null
-        }));
+        console.log('Query executed successfully, got claims:', claims.length);
 
+        // Simple response for now
         res.json({
             success: true,
+            debug: {
+                queryParams: finalParams,
+                queryParamTypes: finalParams.map(p => typeof p),
+                claimsFound: claims.length
+            },
             data: {
-                claims: enhancedClaims,
+                claims: claims.slice(0, 5), // Just first 5 for debugging
                 pagination: {
                     current_page: pageNum,
-                    total_pages: Math.ceil(countResult[0].total / limitNum),
-                    total_claims: countResult[0].total,
-                    per_page: limitNum
+                    per_page: limitNum,
+                    total_claims: claims.length
                 }
             }
         });
+
     } catch (error) {
-        console.error('Get all claims error:', error);
+        console.error('=== DETAILED ERROR DEBUG ===');
+        console.error('Error message:', error.message);
+        console.error('Error code:', error.code);
+        console.error('Error errno:', error.errno);
+        console.error('SQL State:', error.sqlState);
+        console.error('SQL Message:', error.sqlMessage);
+        console.error('Full error:', error);
+        
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message
+            error: error.message,
+            debug: {
+                code: error.code,
+                errno: error.errno,
+                sqlState: error.sqlState,
+                sqlMessage: error.sqlMessage
+            }
         });
     }
 };
