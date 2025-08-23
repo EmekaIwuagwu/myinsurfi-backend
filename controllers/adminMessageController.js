@@ -125,7 +125,7 @@ const getMessageThread = async (req, res) => {
 
     const connection = getConnection();
 
-    // Get main message - SIMPLIFIED query
+    // Get main message
     const [mainMessage] = await connection.execute(`
       SELECT 
         m.id,
@@ -154,7 +154,7 @@ const getMessageThread = async (req, res) => {
       });
     }
 
-    // Get all replies - SIMPLIFIED query
+    // Get replies - SIMPLIFIED without problematic JOIN
     const [replies] = await connection.execute(`
       SELECT 
         m.id,
@@ -163,13 +163,8 @@ const getMessageThread = async (req, res) => {
         m.subject,
         m.message,
         m.created_at,
-        m.updated_at,
-        CASE 
-          WHEN m.sender_type = 'admin' THEN a.name
-          ELSE NULL
-        END as sender_name
+        m.updated_at
       FROM messages m
-      LEFT JOIN admin_users a ON m.sender_type = 'admin' AND m.wallet_address = CAST(a.id AS CHAR)
       WHERE m.parent_message_id = ${message_id}
       ORDER BY m.created_at ASC
     `);
@@ -191,7 +186,7 @@ const getMessageThread = async (req, res) => {
       replies: replies.map(reply => ({
         ...reply,
         sender_display_name: reply.sender_type === 'admin' ?
-          reply.sender_name :
+          'Admin' :
           generateNameFromWallet(reply.wallet_address),
         time_ago: getTimeAgo(reply.created_at)
       }))
