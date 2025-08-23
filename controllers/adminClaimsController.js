@@ -3,103 +3,54 @@ const { getConnection } = require('../config/database');
 // Get All Claims
 const getAllClaims = async (req, res) => {
     try {
-        const {
-            page = 1,
-            limit = 10,
-            status = 'all',
-            policy_type = 'all',
-            sortBy = 'created_at',
-            sortOrder = 'DESC'
-        } = req.query;
-
         const connection = getConnection();
         
-        // FIXED: Ensure we have valid integers
-        const pageNum = Math.max(1, parseInt(page) || 1);
-        const limitNum = Math.max(1, Math.min(100, parseInt(limit) || 10)); // Cap at 100
-        const offsetNum = (pageNum - 1) * limitNum;
+        // Simple pagination - default values
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const offset = (page - 1) * limit;
 
-        // Validate sortBy
-        const validColumns = {
-            'created_at': 'c.created_at',
-            'submitted_date': 'c.created_at', // Map to actual column
-            'claim_amount': 'c.claim_amount',
-            'status': 'c.status',
-            'policy_type': 'c.policy_type'
-        };
-        
-        const sortColumn = validColumns[sortBy] || 'c.created_at';
-        const sortDirection = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
-
-        // Build WHERE conditions
-        let whereConditions = ['1=1'];
-        let queryParams = [];
-
-        if (status !== 'all') {
-            whereConditions.push('c.status = ?');
-            queryParams.push(status);
-        }
-
-        if (policy_type !== 'all') {
-            whereConditions.push('c.policy_type = ?');
-            queryParams.push(policy_type);
-        }
-
-        const whereClause = whereConditions.join(' AND ');
-
-        // FIXED: Use MySQL's preferred LIMIT offset, count syntax
-        const mainQuery = `
+        // Get all claims - SIMPLE query matching your exact schema
+        const [claims] = await connection.execute(`
             SELECT 
+                c.id,
                 c.claim_id,
                 c.wallet_address,
                 c.policy_type,
+                c.policy_id,
                 c.claim_amount,
                 c.description,
-                c.status,
-                c.created_at,
                 c.incident_date,
+                c.documents_count,
+                c.status,
+                c.reviewed_by,
                 c.reviewed_at,
+                c.admin_notes,
                 c.payout_amount,
+                c.payout_date,
+                c.created_at,
+                c.updated_at,
                 a.name as reviewed_by_name
             FROM insurance_claims c
             LEFT JOIN admin_users a ON c.reviewed_by = a.id
-            WHERE ${whereClause}
-            ORDER BY ${sortColumn} ${sortDirection}
-            LIMIT ?, ?
-        `;
+            ORDER BY c.created_at DESC
+            LIMIT ${limit} OFFSET ${offset}
+        `);
 
-        // Parameters: [...whereParams, offset, limit]
-        const mainQueryParams = [...queryParams, offsetNum, limitNum];
+        // Get total count
+        const [countResult] = await connection.execute(`
+            SELECT COUNT(*) as total FROM insurance_claims
+        `);
 
-        console.log('Executing query:', mainQuery);
-        console.log('With parameters:', mainQueryParams);
-
-        const [claims] = await connection.execute(mainQuery, mainQueryParams);
-
-        // Get count for pagination
-        const countQuery = `
-            SELECT COUNT(*) as total
-            FROM insurance_claims c
-            WHERE ${whereClause}
-        `;
-
-        const [countResult] = await connection.execute(countQuery, queryParams);
-
-        // Process claims
+        // Add helper functions
         const { generateNameFromWallet } = require('./adminUserController');
 
         const enhancedClaims = claims.map(claim => ({
             ...claim,
-            customer: generateNameFromWallet(claim.wallet_address),
-            formatted_wallet: `${claim.wallet_address.slice(0, 6)}...${claim.wallet_address.slice(-4)}`,
-            formatted_amount: parseFloat(claim.claim_amount || 0).toLocaleString('en-US', {
-                style: 'currency',
-                currency: 'USD'
-            }),
-            estimated_payout: claim.payout_amount ? parseFloat(claim.payout_amount).toLocaleString('en-US', {
-                style: 'currency',
-                currency: 'USD'
-            }) : null
+            customer_name: generateNameFromWallet(claim.wallet_address),
+            short_wallet: `${claim.wallet_address.slice(0, 6)}...${claim.wallet_address.slice(-4)}`,
+            formatted_amount: `$${parseFloat(claim.claim_amount).toLocaleString()}`,
+            formatted_payout: claim.payout_amount ? `$${parseFloat(claim.payout_amount).toLocaleString()}` : null
         }));
 
         res.json({
@@ -107,10 +58,10 @@ const getAllClaims = async (req, res) => {
             data: {
                 claims: enhancedClaims,
                 pagination: {
-                    current_page: pageNum,
-                    total_pages: Math.ceil(countResult[0].total / limitNum),
+                    current_page: page,
+                    total_pages: Math.ceil(countResult[0].total / limit),
                     total_claims: countResult[0].total,
-                    per_page: limitNum
+                    per_page: limit
                 }
             }
         });
@@ -124,6 +75,7 @@ const getAllClaims = async (req, res) => {
         });
     }
 };
+
 // Get Claim Details
 const getClaimDetails = async (req, res) => {
     try {
