@@ -15,39 +15,56 @@ const getAllClaims = async (req, res) => {
         const connection = getConnection();
         const offset = (parseInt(page) - 1) * parseInt(limit);
 
+        // FIXED: Validate and map sortBy parameters to actual database columns
+        const validColumns = {
+            'created_at': 'c.created_at',
+            'submitted_date': 'c.created_at', // Map submitted_date to created_at
+            'claim_amount': 'c.claim_amount',
+            'status': 'c.status',
+            'policy_type': 'c.policy_type',
+            'incident_date': 'c.incident_date',
+            'reviewed_at': 'c.reviewed_at'
+        };
+
+        // Use default if sortBy is invalid
+        const actualSortColumn = validColumns[sortBy] || validColumns['created_at'];
+
+        // Validate sort order
+        const validSortOrder = ['ASC', 'DESC'].includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC';
+
         // Build filters
         let statusFilter = '';
         let typeFilter = '';
         let queryParams = [];
 
         if (status !== 'all') {
-            statusFilter = 'AND status = ?';
+            statusFilter = 'AND c.status = ?';
             queryParams.push(status);
         }
 
         if (policy_type !== 'all') {
-            typeFilter = 'AND policy_type = ?';
+            typeFilter = 'AND c.policy_type = ?';
             queryParams.push(policy_type);
         }
 
-        // Get claims with customer info
+        // Get claims with customer info - FIXED: Use validated column names
         const [claims] = await connection.execute(`
-      SELECT 
-        c.*,
-        a.name as reviewed_by_name
-      FROM insurance_claims c
-      LEFT JOIN admin_users a ON c.reviewed_by = a.id
-      WHERE 1=1 ${statusFilter} ${typeFilter}
-      ORDER BY ${sortBy} ${sortOrder}
-      LIMIT ? OFFSET ?
-    `, [...queryParams, parseInt(limit), offset]);
+            SELECT 
+                c.*,
+                a.name as reviewed_by_name
+            FROM insurance_claims c
+            LEFT JOIN admin_users a ON c.reviewed_by = a.id
+            WHERE 1=1 ${statusFilter} ${typeFilter}
+            ORDER BY ${actualSortColumn} ${validSortOrder}
+            LIMIT ? OFFSET ?
+        `, [...queryParams, parseInt(limit), offset]);
 
         // Get total count for pagination
         const [countResult] = await connection.execute(`
-      SELECT COUNT(*) as total
-      FROM insurance_claims c
-      WHERE 1=1 ${statusFilter} ${typeFilter}
-    `, queryParams);
+            SELECT COUNT(*) as total
+            FROM insurance_claims c
+            WHERE 1=1 ${statusFilter} ${typeFilter}
+        `, queryParams);
 
         // Enhance claims with customer info
         const { generateNameFromWallet } = require('./adminUserController');
@@ -87,7 +104,6 @@ const getAllClaims = async (req, res) => {
         });
     }
 };
-
 // Get Claim Details
 const getClaimDetails = async (req, res) => {
     try {
