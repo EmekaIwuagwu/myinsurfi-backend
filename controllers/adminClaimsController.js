@@ -13,7 +13,11 @@ const getAllClaims = async (req, res) => {
         } = req.query;
 
         const connection = getConnection();
-        const offset = (parseInt(page) - 1) * parseInt(limit);
+
+        // FIXED: Ensure page and limit are valid numbers before calculating offset
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, parseInt(limit) || 10);
+        const offsetNum = (pageNum - 1) * limitNum;
 
         // FIXED: Validate and map sortBy parameters to actual database columns
         const validColumns = {
@@ -47,7 +51,18 @@ const getAllClaims = async (req, res) => {
             queryParams.push(policy_type);
         }
 
-        // Get claims with customer info - FIXED: Use validated column names
+        // FIXED: Ensure parameters are valid numbers
+        console.log('Query params debug:', {
+            queryParams,
+            limitNum,
+            offsetNum,
+            statusFilter,
+            typeFilter
+        });
+
+        // Get claims with customer info - FIXED: Use proper parameter handling
+        const claimsQueryParams = [...queryParams, limitNum, offsetNum];
+
         const [claims] = await connection.execute(`
             SELECT 
                 c.*,
@@ -57,7 +72,7 @@ const getAllClaims = async (req, res) => {
             WHERE 1=1 ${statusFilter} ${typeFilter}
             ORDER BY ${actualSortColumn} ${validSortOrder}
             LIMIT ? OFFSET ?
-        `, [...queryParams, parseInt(limit), offset]);
+        `, claimsQueryParams);
 
         // Get total count for pagination
         const [countResult] = await connection.execute(`
@@ -88,10 +103,10 @@ const getAllClaims = async (req, res) => {
             data: {
                 claims: enhancedClaims,
                 pagination: {
-                    current_page: parseInt(page),
-                    total_pages: Math.ceil(countResult[0].total / parseInt(limit)),
+                    current_page: pageNum,
+                    total_pages: Math.ceil(countResult[0].total / limitNum),
                     total_claims: countResult[0].total,
-                    per_page: parseInt(limit)
+                    per_page: limitNum
                 }
             }
         });
