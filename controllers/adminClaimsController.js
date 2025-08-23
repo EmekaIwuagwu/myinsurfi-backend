@@ -3,9 +3,6 @@ const { getConnection } = require('../config/database');
 // Get All Claims
 const getAllClaims = async (req, res) => {
     try {
-        console.log('=== DEBUG: Starting getAllClaims ===');
-        console.log('Raw query params:', req.query);
-
         const {
             page = 1,
             limit = 10,
@@ -15,112 +12,115 @@ const getAllClaims = async (req, res) => {
             sortOrder = 'DESC'
         } = req.query;
 
-        console.log('Parsed params:', { page, limit, status, policy_type, sortBy, sortOrder });
-
         const connection = getConnection();
         
-        // Validate and convert numbers
-        const pageNum = parseInt(page);
-        const limitNum = parseInt(limit);
+        // FIXED: Ensure we have valid integers
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, Math.min(100, parseInt(limit) || 10)); // Cap at 100
         const offsetNum = (pageNum - 1) * limitNum;
-        
-        console.log('Calculated numbers:', { pageNum, limitNum, offsetNum });
-        console.log('Are numbers valid?', { 
-            pageValid: !isNaN(pageNum), 
-            limitValid: !isNaN(limitNum), 
-            offsetValid: !isNaN(offsetNum) 
-        });
 
-        // Build filters
-        let statusFilter = '';
-        let typeFilter = '';
+        // Validate sortBy
+        const validColumns = {
+            'created_at': 'c.created_at',
+            'submitted_date': 'c.created_at', // Map to actual column
+            'claim_amount': 'c.claim_amount',
+            'status': 'c.status',
+            'policy_type': 'c.policy_type'
+        };
+        
+        const sortColumn = validColumns[sortBy] || 'c.created_at';
+        const sortDirection = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+        // Build WHERE conditions
+        let whereConditions = ['1=1'];
         let queryParams = [];
 
         if (status !== 'all') {
-            statusFilter = 'AND c.status = ?';
+            whereConditions.push('c.status = ?');
             queryParams.push(status);
         }
 
         if (policy_type !== 'all') {
-            typeFilter = 'AND c.policy_type = ?';
+            whereConditions.push('c.policy_type = ?');
             queryParams.push(policy_type);
         }
 
-        console.log('Filters:', { statusFilter, typeFilter, queryParams });
+        const whereClause = whereConditions.join(' AND ');
 
-        // SIMPLE TEST QUERY FIRST - let's see if basic query works
-        console.log('=== Testing basic query first ===');
-        try {
-            const [basicTest] = await connection.execute(`
-                SELECT COUNT(*) as total FROM insurance_claims
-            `);
-            console.log('Basic query success:', basicTest);
-        } catch (basicError) {
-            console.error('Basic query failed:', basicError);
-            throw basicError;
-        }
-
-        // Now try with parameters
-        const finalParams = [...queryParams, limitNum, offsetNum];
-        console.log('Final parameters array:', finalParams);
-        console.log('Parameter types:', finalParams.map(p => typeof p));
-        console.log('Parameter values:', finalParams);
-
-        const query = `
+        // FIXED: Use MySQL's preferred LIMIT offset, count syntax
+        const mainQuery = `
             SELECT 
-                c.*,
+                c.claim_id,
+                c.wallet_address,
+                c.policy_type,
+                c.claim_amount,
+                c.description,
+                c.status,
+                c.created_at,
+                c.incident_date,
+                c.reviewed_at,
+                c.payout_amount,
                 a.name as reviewed_by_name
             FROM insurance_claims c
             LEFT JOIN admin_users a ON c.reviewed_by = a.id
-            WHERE 1=1 ${statusFilter} ${typeFilter}
-            ORDER BY c.created_at DESC
-            LIMIT ? OFFSET ?
+            WHERE ${whereClause}
+            ORDER BY ${sortColumn} ${sortDirection}
+            LIMIT ?, ?
         `;
 
-        console.log('Final query:', query);
-        console.log('About to execute with params:', finalParams);
+        // Parameters: [...whereParams, offset, limit]
+        const mainQueryParams = [...queryParams, offsetNum, limitNum];
 
-        const [claims] = await connection.execute(query, finalParams);
+        console.log('Executing query:', mainQuery);
+        console.log('With parameters:', mainQueryParams);
 
-        console.log('Query executed successfully, got claims:', claims.length);
+        const [claims] = await connection.execute(mainQuery, mainQueryParams);
 
-        // Simple response for now
+        // Get count for pagination
+        const countQuery = `
+            SELECT COUNT(*) as total
+            FROM insurance_claims c
+            WHERE ${whereClause}
+        `;
+
+        const [countResult] = await connection.execute(countQuery, queryParams);
+
+        // Process claims
+        const { generateNameFromWallet } = require('./adminUserController');
+
+        const enhancedClaims = claims.map(claim => ({
+            ...claim,
+            customer: generateNameFromWallet(claim.wallet_address),
+            formatted_wallet: `${claim.wallet_address.slice(0, 6)}...${claim.wallet_address.slice(-4)}`,
+            formatted_amount: parseFloat(claim.claim_amount || 0).toLocaleString('en-US', {
+                style: 'currency',
+                currency: 'USD'
+            }),
+            estimated_payout: claim.payout_amount ? parseFloat(claim.payout_amount).toLocaleString('en-US', {
+                style: 'currency',
+                currency: 'USD'
+            }) : null
+        }));
+
         res.json({
             success: true,
-            debug: {
-                queryParams: finalParams,
-                queryParamTypes: finalParams.map(p => typeof p),
-                claimsFound: claims.length
-            },
             data: {
-                claims: claims.slice(0, 5), // Just first 5 for debugging
+                claims: enhancedClaims,
                 pagination: {
                     current_page: pageNum,
-                    per_page: limitNum,
-                    total_claims: claims.length
+                    total_pages: Math.ceil(countResult[0].total / limitNum),
+                    total_claims: countResult[0].total,
+                    per_page: limitNum
                 }
             }
         });
 
     } catch (error) {
-        console.error('=== DETAILED ERROR DEBUG ===');
-        console.error('Error message:', error.message);
-        console.error('Error code:', error.code);
-        console.error('Error errno:', error.errno);
-        console.error('SQL State:', error.sqlState);
-        console.error('SQL Message:', error.sqlMessage);
-        console.error('Full error:', error);
-        
+        console.error('Get all claims error:', error);
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message,
-            debug: {
-                code: error.code,
-                errno: error.errno,
-                sqlState: error.sqlState,
-                sqlMessage: error.sqlMessage
-            }
+            error: error.message
         });
     }
 };
