@@ -1,6 +1,7 @@
 const { getConnection } = require('../config/database');
 
 // Helper function to calculate time ago
+// Helper function to calculate time ago
 const getTimeAgo = (date) => {
   const now = new Date();
   const diff = now - new Date(date);
@@ -14,65 +15,76 @@ const getTimeAgo = (date) => {
   return 'Just now';
 };
 
-// Get All Messages
+// FIXED: Simplified getAllMessages function
 const getAllMessages = async (req, res) => {
   try {
-    const { 
-      page = 1, 
-      limit = 10, 
-      status = 'all',
-      priority = 'all',
-      sortBy = 'created_at',
-      sortOrder = 'DESC' 
-    } = req.query;
-
     const connection = getConnection();
-    const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    // Build filters
-    let statusFilter = '';
-    let priorityFilter = '';
+    // Simple pagination - default values
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+
+    // Optional filters
+    const status = req.query.status || 'all';
+    const priority = req.query.priority || 'all';
+
+    // Build WHERE conditions
+    let whereConditions = ['m.parent_message_id IS NULL']; // Only get parent messages
     let queryParams = [];
 
     if (status !== 'all') {
-      statusFilter = 'AND m.status = ?';
+      whereConditions.push('m.status = ?');
       queryParams.push(status);
     }
 
     if (priority !== 'all') {
-      priorityFilter = 'AND m.priority = ?';
+      whereConditions.push('m.priority = ?');
       queryParams.push(priority);
     }
 
-    // Get messages with admin info
+    const whereClause = whereConditions.join(' AND ');
+
+    // Get messages with admin info - SIMPLE query
     const [messages] = await connection.execute(`
       SELECT 
-        m.*,
+        m.id,
+        m.wallet_address,
+        m.sender_type,
+        m.subject,
+        m.message,
+        m.parent_message_id,
+        m.priority,
+        m.status,
+        m.is_read,
+        m.admin_assigned,
+        m.created_at,
+        m.updated_at,
         a.name as assigned_admin_name,
         (SELECT COUNT(*) FROM messages m2 WHERE m2.parent_message_id = m.id) as reply_count
       FROM messages m
       LEFT JOIN admin_users a ON m.admin_assigned = a.id
-      WHERE m.parent_message_id IS NULL ${statusFilter} ${priorityFilter}
-      ORDER BY ${sortBy} ${sortOrder}
-      LIMIT ? OFFSET ?
-    `, [...queryParams, parseInt(limit), offset]);
+      WHERE ${whereClause}
+      ORDER BY m.created_at DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `, queryParams);
 
     // Get total count for pagination
     const [countResult] = await connection.execute(`
       SELECT COUNT(*) as total
       FROM messages m
-      WHERE m.parent_message_id IS NULL ${statusFilter} ${priorityFilter}
+      WHERE ${whereClause}
     `, queryParams);
 
     // Enhance messages with customer info
     const { generateNameFromWallet } = require('./adminUserController');
-    
+
     const enhancedMessages = messages.map(message => ({
       ...message,
       customer: generateNameFromWallet(message.wallet_address),
       formatted_wallet: `${message.wallet_address.slice(0, 6)}...${message.wallet_address.slice(-4)}`,
-      message_preview: message.message.length > 100 ? 
-        message.message.substring(0, 100) + '...' : 
+      message_preview: message.message.length > 100 ?
+        message.message.substring(0, 100) + '...' :
         message.message,
       time_ago: getTimeAgo(message.created_at)
     }));
@@ -82,10 +94,10 @@ const getAllMessages = async (req, res) => {
       data: {
         messages: enhancedMessages,
         pagination: {
-          current_page: parseInt(page),
-          total_pages: Math.ceil(countResult[0].total / parseInt(limit)),
+          current_page: page,
+          total_pages: Math.ceil(countResult[0].total / limit),
           total_messages: countResult[0].total,
-          per_page: parseInt(limit)
+          per_page: limit
         }
       }
     });
@@ -153,7 +165,7 @@ const getMessageThread = async (req, res) => {
 
     // Enhance with customer info
     const { generateNameFromWallet, generateEmailFromWallet } = require('./adminUserController');
-    
+
     const enhancedMessage = {
       ...mainMessage[0],
       customer: generateNameFromWallet(mainMessage[0].wallet_address),
@@ -161,8 +173,8 @@ const getMessageThread = async (req, res) => {
       formatted_wallet: `${mainMessage[0].wallet_address.slice(0, 6)}...${mainMessage[0].wallet_address.slice(-4)}`,
       replies: replies.map(reply => ({
         ...reply,
-        sender_display_name: reply.sender_type === 'admin' ? 
-          reply.sender_name : 
+        sender_display_name: reply.sender_type === 'admin' ?
+          reply.sender_name :
           generateNameFromWallet(reply.wallet_address),
         time_ago: getTimeAgo(reply.created_at)
       }))
