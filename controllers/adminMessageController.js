@@ -125,16 +125,27 @@ const getMessageThread = async (req, res) => {
 
     const connection = getConnection();
 
-    // Get main message
+    // Get main message - SIMPLIFIED query
     const [mainMessage] = await connection.execute(`
       SELECT 
-        m.*,
+        m.id,
+        m.wallet_address,
+        m.sender_type,
+        m.subject,
+        m.message,
+        m.parent_message_id,
+        m.priority,
+        m.status,
+        m.is_read,
+        m.admin_assigned,
+        m.created_at,
+        m.updated_at,
         a.name as assigned_admin_name,
         a.email as assigned_admin_email
       FROM messages m
       LEFT JOIN admin_users a ON m.admin_assigned = a.id
-      WHERE m.id = ?
-    `, [message_id]);
+      WHERE m.id = ${message_id}
+    `);
 
     if (mainMessage.length === 0) {
       return res.status(404).json({
@@ -143,25 +154,30 @@ const getMessageThread = async (req, res) => {
       });
     }
 
-    // Get all replies
+    // Get all replies - SIMPLIFIED query
     const [replies] = await connection.execute(`
       SELECT 
-        m.*,
+        m.id,
+        m.wallet_address,
+        m.sender_type,
+        m.subject,
+        m.message,
+        m.created_at,
+        m.updated_at,
         CASE 
           WHEN m.sender_type = 'admin' THEN a.name
           ELSE NULL
         END as sender_name
       FROM messages m
       LEFT JOIN admin_users a ON m.sender_type = 'admin' AND m.wallet_address = CAST(a.id AS CHAR)
-      WHERE m.parent_message_id = ?
+      WHERE m.parent_message_id = ${message_id}
       ORDER BY m.created_at ASC
-    `, [message_id]);
+    `);
 
     // Mark main message as read
-    await connection.execute(
-      'UPDATE messages SET is_read = TRUE WHERE id = ?',
-      [message_id]
-    );
+    await connection.execute(`
+      UPDATE messages SET is_read = TRUE WHERE id = ${message_id}
+    `);
 
     // Enhance with customer info
     const { generateNameFromWallet, generateEmailFromWallet } = require('./adminUserController');
@@ -171,6 +187,7 @@ const getMessageThread = async (req, res) => {
       customer: generateNameFromWallet(mainMessage[0].wallet_address),
       customer_email: generateEmailFromWallet(mainMessage[0].wallet_address),
       formatted_wallet: `${mainMessage[0].wallet_address.slice(0, 6)}...${mainMessage[0].wallet_address.slice(-4)}`,
+      time_ago: getTimeAgo(mainMessage[0].created_at),
       replies: replies.map(reply => ({
         ...reply,
         sender_display_name: reply.sender_type === 'admin' ?
