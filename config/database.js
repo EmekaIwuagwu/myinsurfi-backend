@@ -10,16 +10,46 @@ const dbConfig = {
   ssl: {
     rejectUnauthorized: false
   },
-  connectTimeout: 60000
+  // Connection pool configuration
+  connectionLimit: 10,
+  queueLimit: 0,
+  acquireTimeout: 60000,
+  timeout: 60000,
+  // Handle connection drops
+  reconnect: true,
+  idleTimeout: 300000,
+  // Keep connections alive
+  keepAliveInitialDelay: 0,
+  enableKeepAlive: true
 };
 
-let connection;
+let pool;
 
 const connectDB = async () => {
   try {
-    connection = await mysql.createConnection(dbConfig);
+    pool = mysql.createPool(dbConfig);
+    
+    // Test the connection
+    const connection = await pool.getConnection();
     console.log('MySQL Connected Successfully');
-    return connection;
+    connection.release();
+    
+    // Handle pool events
+    pool.on('connection', (connection) => {
+      console.log('New connection established as id ' + connection.threadId);
+    });
+
+    pool.on('error', (err) => {
+      console.error('Database pool error:', err);
+      if (err.code === 'PROTOCOL_CONNECTION_LOST') {
+        console.log('Reconnecting to database...');
+        connectDB();
+      } else {
+        throw err;
+      }
+    });
+
+    return pool;
   } catch (error) {
     console.error('Database connection failed:', error);
     process.exit(1);
@@ -27,10 +57,18 @@ const connectDB = async () => {
 };
 
 const getConnection = () => {
-  if (!connection) {
-    throw new Error('Database not connected');
+  if (!pool) {
+    throw new Error('Database pool not initialized');
   }
-  return connection;
+  return pool;
 };
 
-module.exports = { connectDB, getConnection };
+// Gracefully close the pool
+const closeDB = async () => {
+  if (pool) {
+    await pool.end();
+    console.log('Database pool closed');
+  }
+};
+
+module.exports = { connectDB, getConnection, closeDB };
