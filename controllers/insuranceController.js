@@ -32,7 +32,7 @@ async function tableHasColumn(connection, table, column) {
 }
 
 // ---------- HOME ----------
-exports.createHomeInsuranceQuote = async (req, res, next) => {
+const createHomeInsuranceQuote = async (req, res, next) => {
   const connection = getConnection();
   try {
     // Debug raw body
@@ -146,7 +146,7 @@ exports.createHomeInsuranceQuote = async (req, res, next) => {
 };
 
 // ---------- CAR ----------
-exports.createCarInsuranceQuote = async (req, res, next) => {
+const createCarInsuranceQuote = async (req, res, next) => {
   const connection = getConnection();
   try {
     console.log('[CAR] req.body:', JSON.stringify(req.body, null, 2));
@@ -242,7 +242,7 @@ exports.createCarInsuranceQuote = async (req, res, next) => {
 };
 
 // ---------- TRAVEL ----------
-exports.createTravelInsuranceQuote = async (req, res, next) => {
+const createTravelInsuranceQuote = async (req, res, next) => {
   const connection = getConnection();
   try {
     console.log('[TRAVEL] req.body:', JSON.stringify(req.body, null, 2));
