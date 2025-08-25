@@ -1,52 +1,26 @@
 const { getConnection } = require('../config/database');
 
-// controllers/insuranceController.js
-// ---------- helpers ----------
-const toNull = (v) => (v === undefined ? null : v);
-const numOrNull = (v) => {
-  if (v === undefined || v === null || v === '') return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-};
-const dateOrNull = (v) => {
-  if (!v) return null;
-  // Accept "YYYY-MM-DD" or ISO, store "YYYY-MM-DD"
+// Helper function to check if column exists in table
+const columnExists = async (connection, tableName, columnName) => {
   try {
-    const d = new Date(v);
-    if (isNaN(d.getTime())) return null;
-    return d.toISOString().slice(0, 10);
-  } catch {
-    return null;
+    const [result] = await connection.execute(`
+      SELECT COUNT(*) as count 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = ? 
+      AND COLUMN_NAME = ?
+    `, [tableName, columnName]);
+    return result[0].count > 0;
+  } catch (error) {
+    return false;
   }
 };
 
-// Check if a column exists before inserting into it (avoids SQL errors on older schemas)
-async function tableHasColumn(connection, table, column) {
-  const [rows] = await connection.execute(
-    `SELECT COUNT(*) AS cnt 
-       FROM INFORMATION_SCHEMA.COLUMNS 
-      WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
-    [table, column]
-  );
-  return rows?.[0]?.cnt > 0;
-}
-
-// ---------- HOME ----------
-const createHomeInsuranceQuote = async (req, res, next) => {
-  const connection = getConnection();
+// Create Home Insurance Quote
+const createHomeInsuranceQuote = async (req, res) => {
   try {
-    // Debug raw body
-    console.log('[HOME] req.body:', JSON.stringify(req.body, null, 2));
-
     const {
-      // Web3 identifiers (recommended)
       wallet_address,
-      tx_hash,
-      chain_id,
-      payment_currency,
-      premium_eth,
-
-      // Business fields
       house_type,
       year_built,
       house_address,
@@ -58,106 +32,55 @@ const createHomeInsuranceQuote = async (req, res, next) => {
       coverage_duration,
       coverage_amount,
       total_premium
-    } = req.body || {};
+    } = req.body;
 
-    // Validate must-haves (adjust as your schema requires)
-    const missing = [];
-    if (!wallet_address) missing.push('wallet_address');
-    if (!policy_start_date) missing.push('policy_start_date');
-    if (!policy_end_date) missing.push('policy_end_date');
-    if (missing.length) {
+    if (!wallet_address) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields',
-        missing
+        message: 'Wallet address is required'
       });
     }
 
-    // Build dynamic column list (add tx details if your table has them)
-    const cols = [
-      'wallet_address',
-      'house_type',
-      'year_built',
-      'house_address',
-      'property_owner_name',
-      'property_owner_telephone',
-      'property_owner_email',
-      'policy_start_date',
-      'policy_end_date',
-      'coverage_duration'
-    ];
-    const vals = [
-      toNull(wallet_address),
-      toNull(house_type),
-      numOrNull(year_built),
-      toNull(house_address),
-      toNull(property_owner_name),
-      toNull(property_owner_telephone),
-      toNull(property_owner_email),
-      dateOrNull(policy_start_date),
-      dateOrNull(policy_end_date),
-      numOrNull(coverage_duration)
-    ];
+    const connection = getConnection();
 
-    // Add optional business columns if present
-    if (await tableHasColumn(connection, 'home_insurance_quotes', 'coverage_amount')) {
-      cols.push('coverage_amount');
-      vals.push(numOrNull(coverage_amount));
-    }
-    if (await tableHasColumn(connection, 'home_insurance_quotes', 'total_premium')) {
-      cols.push('total_premium');
-      vals.push(numOrNull(total_premium));
-    }
+    const [result] = await connection.execute(
+      `INSERT INTO home_insurance_quotes 
+       (wallet_address, house_type, year_built, house_address, property_owner_name, 
+        property_owner_telephone, property_owner_email, policy_start_date, policy_end_date, 
+        coverage_duration, coverage_amount, total_premium) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [wallet_address, house_type, year_built, house_address, property_owner_name,
+        property_owner_telephone, property_owner_email, policy_start_date, policy_end_date,
+        coverage_duration, coverage_amount, total_premium]
+    );
 
-    // Add optional web3 columns if present
-    if (await tableHasColumn(connection, 'home_insurance_quotes', 'tx_hash')) {
-      cols.push('tx_hash');
-      vals.push(toNull(tx_hash));
-    }
-    if (await tableHasColumn(connection, 'home_insurance_quotes', 'chain_id')) {
-      cols.push('chain_id');
-      vals.push(toNull(chain_id));
-    }
-    if (await tableHasColumn(connection, 'home_insurance_quotes', 'payment_currency')) {
-      cols.push('payment_currency');
-      vals.push(toNull(payment_currency));
-    }
-    if (await tableHasColumn(connection, 'home_insurance_quotes', 'premium_eth')) {
-      cols.push('premium_eth');
-      vals.push(numOrNull(premium_eth));
-    }
+    await connection.execute(
+      `INSERT INTO notifications (wallet_address, type, title, message) 
+       VALUES (?, ?, ?, ?)`,
+      [wallet_address, 'home_insurance', 'Home Insurance Quote Created',
+        'Your home insurance quote has been successfully created.']
+    );
 
-    const placeholders = cols.map(() => '?').join(', ');
-    const sql = `
-      INSERT INTO home_insurance_quotes
-        (${cols.join(', ')})
-      VALUES (${placeholders})
-    `;
-
-    console.log('[HOME] INSERT columns:', cols);
-    console.log('[HOME] INSERT values:', vals);
-
-    const [result] = await connection.execute(sql, vals);
-    return res.json({ success: true, id: result.insertId });
-  } catch (err) {
-    console.error('Error creating home insurance quote:', err);
-    return next(err);
+    res.status(201).json({
+      success: true,
+      message: 'Home insurance quote created successfully',
+      data: { id: result.insertId }
+    });
+  } catch (error) {
+    console.error('Error creating home insurance quote:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
   }
 };
 
-// ---------- CAR ----------
-const createCarInsuranceQuote = async (req, res, next) => {
-  const connection = getConnection();
+// Create Car Insurance Quote (UPDATED)
+const createCarInsuranceQuote = async (req, res) => {
   try {
-    console.log('[CAR] req.body:', JSON.stringify(req.body, null, 2));
-
     const {
       wallet_address,
-      tx_hash,
-      chain_id,
-      payment_currency,
-      premium_eth,
-
       car_make,
       car_model,
       car_year,
@@ -167,93 +90,82 @@ const createCarInsuranceQuote = async (req, res, next) => {
       coverage_duration,
       coverage_amount,
       total_premium
-    } = req.body || {};
+    } = req.body;
 
-    const missing = [];
-    if (!wallet_address) missing.push('wallet_address');
-    if (!policy_start_date) missing.push('policy_start_date');
-    if (!policy_end_date) missing.push('policy_end_date');
-    if (missing.length) {
-      return res.status(400).json({ success: false, message: 'Missing required fields', missing });
-    }
-
-    const cols = [
-      'wallet_address',
-      'car_make',
-      'car_model',
-      'car_year',
-      'mileage',
-      'policy_start_date',
-      'policy_end_date',
-      'coverage_duration'
-    ];
-    const vals = [
-      toNull(wallet_address),
-      toNull(car_make),
-      toNull(car_model),
-      numOrNull(car_year),
-      numOrNull(mileage),
-      dateOrNull(policy_start_date),
-      dateOrNull(policy_end_date),
-      numOrNull(coverage_duration)
-    ];
-
-    if (await tableHasColumn(connection, 'car_insurance_quotes', 'coverage_amount')) {
-      cols.push('coverage_amount');
-      vals.push(numOrNull(coverage_amount));
-    }
-    if (await tableHasColumn(connection, 'car_insurance_quotes', 'total_premium')) {
-      cols.push('total_premium');
-      vals.push(numOrNull(total_premium));
-    }
-    if (await tableHasColumn(connection, 'car_insurance_quotes', 'tx_hash')) {
-      cols.push('tx_hash');
-      vals.push(toNull(tx_hash));
-    }
-    if (await tableHasColumn(connection, 'car_insurance_quotes', 'chain_id')) {
-      cols.push('chain_id');
-      vals.push(toNull(chain_id));
-    }
-    if (await tableHasColumn(connection, 'car_insurance_quotes', 'payment_currency')) {
-      cols.push('payment_currency');
-      vals.push(toNull(payment_currency));
-    }
-    if (await tableHasColumn(connection, 'car_insurance_quotes', 'premium_eth')) {
-      cols.push('premium_eth');
-      vals.push(numOrNull(premium_eth));
+    if (!wallet_address) {
+      return res.status(400).json({
+        success: false,
+        message: 'Wallet address is required'
+      });
     }
 
-    const placeholders = cols.map(() => '?').join(', ');
-    const sql = `
-      INSERT INTO car_insurance_quotes
-        (${cols.join(', ')})
-      VALUES (${placeholders})
-    `;
+    const connection = getConnection();
 
-    console.log('[CAR] INSERT columns:', cols);
-    console.log('[CAR] INSERT values:', vals);
+    const hasCoverageAmount = await columnExists(connection, 'car_insurance_quotes', 'coverage_amount');
+    const hasTotalPremium = await columnExists(connection, 'car_insurance_quotes', 'total_premium');
 
-    const [result] = await connection.execute(sql, vals);
-    return res.json({ success: true, id: result.insertId });
-  } catch (err) {
-    console.error('Error creating car insurance quote:', err);
-    return next(err);
+    let query, values;
+
+    if (hasCoverageAmount && hasTotalPremium) {
+      if (!coverage_amount) {
+        return res.status(400).json({
+          success: false,
+          message: 'Coverage amount is required'
+        });
+      }
+
+      query = `INSERT INTO car_insurance_quotes 
+               (wallet_address, car_make, car_model, car_year, mileage, 
+                policy_start_date, policy_end_date, coverage_duration, coverage_amount, total_premium) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+      values = [wallet_address, car_make, car_model, car_year, mileage,
+        policy_start_date, policy_end_date, coverage_duration, coverage_amount, total_premium || 0];
+    } else {
+      query = `INSERT INTO car_insurance_quotes 
+               (wallet_address, car_make, car_model, car_year, mileage, 
+                policy_start_date, policy_end_date, coverage_duration) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+      values = [wallet_address, car_make, car_model, car_year, mileage,
+        policy_start_date, policy_end_date, coverage_duration];
+    }
+
+    const [result] = await connection.execute(query, values);
+
+    await connection.execute(
+      `INSERT INTO notifications (wallet_address, type, title, message) 
+       VALUES (?, ?, ?, ?)`,
+      [wallet_address, 'car_insurance', 'Car Insurance Quote Created',
+        'Your car insurance quote has been successfully created.']
+    );
+
+    const responseData = { id: result.insertId };
+    if (hasCoverageAmount && coverage_amount) {
+      responseData.coverage_amount = coverage_amount;
+    }
+    if (hasTotalPremium && total_premium) {
+      responseData.total_premium = total_premium;
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Car insurance quote created successfully',
+      data: responseData
+    });
+  } catch (error) {
+    console.error('Error creating car insurance quote:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
   }
 };
 
-// ---------- TRAVEL ----------
-const createTravelInsuranceQuote = async (req, res, next) => {
-  const connection = getConnection();
+// Create Travel Insurance Quote (UPDATED)
+const createTravelInsuranceQuote = async (req, res) => {
   try {
-    console.log('[TRAVEL] req.body:', JSON.stringify(req.body, null, 2));
-
     const {
       wallet_address,
-      tx_hash,
-      chain_id,
-      payment_currency,
-      premium_eth,
-
       origin,
       departure,
       destination,
@@ -264,82 +176,76 @@ const createTravelInsuranceQuote = async (req, res, next) => {
       coverage_duration,
       coverage_amount,
       total_premium
-    } = req.body || {};
+    } = req.body;
 
-    const missing = [];
-    if (!wallet_address) missing.push('wallet_address');
-    if (!travel_start_date) missing.push('travel_start_date');
-    if (!travel_end_date) missing.push('travel_end_date');
-    if (missing.length) {
-      return res.status(400).json({ success: false, message: 'Missing required fields', missing });
-    }
-
-    const cols = [
-      'wallet_address',
-      'origin',
-      'departure',
-      'destination',
-      'passport_number',
-      'passport_country',
-      'travel_start_date',
-      'travel_end_date',
-      'coverage_duration'
-    ];
-    const vals = [
-      toNull(wallet_address),
-      toNull(origin),
-      dateOrNull(departure),
-      toNull(destination),
-      toNull(passport_number),
-      toNull(passport_country),
-      dateOrNull(travel_start_date),
-      dateOrNull(travel_end_date),
-      numOrNull(coverage_duration)
-    ];
-
-    if (await tableHasColumn(connection, 'travel_insurance_quotes', 'coverage_amount')) {
-      cols.push('coverage_amount');
-      vals.push(numOrNull(coverage_amount));
-    }
-    if (await tableHasColumn(connection, 'travel_insurance_quotes', 'total_premium')) {
-      cols.push('total_premium');
-      vals.push(numOrNull(total_premium));
-    }
-    if (await tableHasColumn(connection, 'travel_insurance_quotes', 'tx_hash')) {
-      cols.push('tx_hash');
-      vals.push(toNull(tx_hash));
-    }
-    if (await tableHasColumn(connection, 'travel_insurance_quotes', 'chain_id')) {
-      cols.push('chain_id');
-      vals.push(toNull(chain_id));
-    }
-    if (await tableHasColumn(connection, 'travel_insurance_quotes', 'payment_currency')) {
-      cols.push('payment_currency');
-      vals.push(toNull(payment_currency));
-    }
-    if (await tableHasColumn(connection, 'travel_insurance_quotes', 'premium_eth')) {
-      cols.push('premium_eth');
-      vals.push(numOrNull(premium_eth));
+    if (!wallet_address) {
+      return res.status(400).json({
+        success: false,
+        message: 'Wallet address is required'
+      });
     }
 
-    const placeholders = cols.map(() => '?').join(', ');
-    const sql = `
-      INSERT INTO travel_insurance_quotes
-        (${cols.join(', ')})
-      VALUES (${placeholders})
-    `;
+    const connection = getConnection();
 
-    console.log('[TRAVEL] INSERT columns:', cols);
-    console.log('[TRAVEL] INSERT values:', vals);
+    const hasCoverageAmount = await columnExists(connection, 'travel_insurance_quotes', 'coverage_amount');
+    const hasTotalPremium = await columnExists(connection, 'travel_insurance_quotes', 'total_premium');
 
-    const [result] = await connection.execute(sql, vals);
-    return res.json({ success: true, id: result.insertId });
-  } catch (err) {
-    console.error('Error creating travel insurance quote:', err);
-    return next(err);
+    let query, values;
+
+    if (hasCoverageAmount && hasTotalPremium) {
+      if (!coverage_amount) {
+        return res.status(400).json({
+          success: false,
+          message: 'Coverage amount is required'
+        });
+      }
+
+      query = `INSERT INTO travel_insurance_quotes 
+               (wallet_address, origin, departure, destination, passport_number, 
+                passport_country, travel_start_date, travel_end_date, coverage_duration, coverage_amount, total_premium) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+      values = [wallet_address, origin, departure, destination, passport_number,
+        passport_country, travel_start_date, travel_end_date, coverage_duration, coverage_amount, total_premium || 0];
+    } else {
+      query = `INSERT INTO travel_insurance_quotes 
+               (wallet_address, origin, departure, destination, passport_number, 
+                passport_country, travel_start_date, travel_end_date, coverage_duration) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+      values = [wallet_address, origin, departure, destination, passport_number,
+        passport_country, travel_start_date, travel_end_date, coverage_duration];
+    }
+
+    const [result] = await connection.execute(query, values);
+
+    await connection.execute(
+      `INSERT INTO notifications (wallet_address, type, title, message) 
+       VALUES (?, ?, ?, ?)`,
+      [wallet_address, 'travel_insurance', 'Travel Insurance Quote Created',
+        'Your travel insurance quote has been successfully created.']
+    );
+
+    const responseData = { id: result.insertId };
+    if (hasCoverageAmount && coverage_amount) {
+      responseData.coverage_amount = coverage_amount;
+    }
+    if (hasTotalPremium && total_premium) {
+      responseData.total_premium = total_premium;
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Travel insurance quote created successfully',
+      data: responseData
+    });
+  } catch (error) {
+    console.error('Error creating travel insurance quote:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
   }
 };
-
 
 // Get Active Policies
 const getActivePolicies = async (req, res) => {
