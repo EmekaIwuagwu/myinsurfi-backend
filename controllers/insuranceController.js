@@ -51,8 +51,8 @@ const formatPolicyDataForPDF = (rawData, policyType) => {
     formatted_premium: cleanData.total_premium ? 
       `$${parseFloat(cleanData.total_premium).toLocaleString('en-US')}` : 
       null,
-    customer_name: cleanData.property_owner_name || generateNameFromWallet(cleanData.wallet_address),
-    customer_email: cleanData.property_owner_email || `${generateNameFromWallet(cleanData.wallet_address).toLowerCase().replace(' ', '.')}@example.com`
+    customer_name: cleanData.property_owner_name || cleanData.car_owner_name || cleanData.traveler_name || generateNameFromWallet(cleanData.wallet_address),
+    customer_email: cleanData.property_owner_email || cleanData.car_owner_email || cleanData.traveler_email || `${generateNameFromWallet(cleanData.wallet_address).toLowerCase().replace(' ', '.')}@example.com`
   };
 };
 
@@ -189,7 +189,7 @@ const createHomeInsuranceQuote = async (req, res) => {
   }
 };
 
-// Create Car Insurance Quote (UPDATED)
+// Create Car Insurance Quote (UPDATED WITH EMAIL FIELDS)
 const createCarInsuranceQuote = async (req, res) => {
   try {
     const {
@@ -198,6 +198,9 @@ const createCarInsuranceQuote = async (req, res) => {
       car_model,
       car_year,
       mileage,
+      car_owner_name,          // NEW: Added owner name
+      car_owner_email,         // NEW: Added owner email  
+      car_owner_telephone,     // NEW: Added owner telephone
       policy_start_date,
       policy_end_date,
       coverage_duration,
@@ -214,33 +217,49 @@ const createCarInsuranceQuote = async (req, res) => {
 
     const connection = getConnection();
 
+    // Check which columns exist
     const hasCoverageAmount = await columnExists(connection, 'car_insurance_quotes', 'coverage_amount');
     const hasTotalPremium = await columnExists(connection, 'car_insurance_quotes', 'total_premium');
+    const hasOwnerName = await columnExists(connection, 'car_insurance_quotes', 'car_owner_name');
+    const hasOwnerEmail = await columnExists(connection, 'car_insurance_quotes', 'car_owner_email');
+    const hasOwnerPhone = await columnExists(connection, 'car_insurance_quotes', 'car_owner_telephone');
 
-    let query, values;
+    let query = `INSERT INTO car_insurance_quotes (wallet_address, car_make, car_model, car_year, mileage, policy_start_date, policy_end_date, coverage_duration`;
+    let values = [wallet_address, car_make, car_model, car_year, mileage, policy_start_date, policy_end_date, coverage_duration];
+    let placeholders = `?, ?, ?, ?, ?, ?, ?, ?`;
 
-    if (hasCoverageAmount && hasTotalPremium) {
-      if (!coverage_amount) {
-        return res.status(400).json({
-          success: false,
-          message: 'Coverage amount is required'
-        });
-      }
-
-      query = `INSERT INTO car_insurance_quotes 
-               (wallet_address, car_make, car_model, car_year, mileage, 
-                policy_start_date, policy_end_date, coverage_duration, coverage_amount, total_premium) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-      values = [wallet_address, car_make, car_model, car_year, mileage,
-        policy_start_date, policy_end_date, coverage_duration, coverage_amount, total_premium || 1200];
-    } else {
-      query = `INSERT INTO car_insurance_quotes 
-               (wallet_address, car_make, car_model, car_year, mileage, 
-                policy_start_date, policy_end_date, coverage_duration) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
-      values = [wallet_address, car_make, car_model, car_year, mileage,
-        policy_start_date, policy_end_date, coverage_duration];
+    // Add optional columns if they exist
+    if (hasCoverageAmount) {
+      query += `, coverage_amount`;
+      placeholders += `, ?`;
+      values.push(coverage_amount || 50000);
     }
+    
+    if (hasTotalPremium) {
+      query += `, total_premium`;
+      placeholders += `, ?`;
+      values.push(total_premium || 1200);
+    }
+    
+    if (hasOwnerName && car_owner_name) {
+      query += `, car_owner_name`;
+      placeholders += `, ?`;
+      values.push(car_owner_name);
+    }
+    
+    if (hasOwnerEmail && car_owner_email) {
+      query += `, car_owner_email`;
+      placeholders += `, ?`;
+      values.push(car_owner_email);
+    }
+    
+    if (hasOwnerPhone && car_owner_telephone) {
+      query += `, car_owner_telephone`;
+      placeholders += `, ?`;
+      values.push(car_owner_telephone);
+    }
+
+    query += `) VALUES (${placeholders})`;
 
     const [result] = await connection.execute(query, values);
 
@@ -262,7 +281,10 @@ const createCarInsuranceQuote = async (req, res) => {
     const policyDataWithDefaults = {
       ...policyData[0],
       coverage_amount: policyData[0].coverage_amount || coverage_amount || 50000,
-      total_premium: policyData[0].total_premium || total_premium || 1200
+      total_premium: policyData[0].total_premium || total_premium || 1200,
+      car_owner_name: policyData[0].car_owner_name || car_owner_name,
+      car_owner_email: policyData[0].car_owner_email || car_owner_email,
+      car_owner_telephone: policyData[0].car_owner_telephone || car_owner_telephone
     };
 
     // Format policy data for PDF/Email
@@ -284,12 +306,8 @@ const createCarInsuranceQuote = async (req, res) => {
       email_sending: 'initiated'
     };
 
-    if (hasCoverageAmount && (coverage_amount || policyDataWithDefaults.coverage_amount)) {
-      responseData.coverage_amount = policyDataWithDefaults.coverage_amount;
-    }
-    if (hasTotalPremium && (total_premium || policyDataWithDefaults.total_premium)) {
-      responseData.total_premium = policyDataWithDefaults.total_premium;
-    }
+    if (hasCoverageAmount) responseData.coverage_amount = policyDataWithDefaults.coverage_amount;
+    if (hasTotalPremium) responseData.total_premium = policyDataWithDefaults.total_premium;
 
     res.status(201).json({
       success: true,
@@ -306,7 +324,7 @@ const createCarInsuranceQuote = async (req, res) => {
   }
 };
 
-// Create Travel Insurance Quote (UPDATED)
+// Create Travel Insurance Quote (UPDATED WITH EMAIL FIELDS)
 const createTravelInsuranceQuote = async (req, res) => {
   try {
     const {
@@ -316,6 +334,9 @@ const createTravelInsuranceQuote = async (req, res) => {
       destination,
       passport_number,
       passport_country,
+      traveler_name,           // NEW: Added traveler name
+      traveler_email,          // NEW: Added traveler email
+      traveler_telephone,      // NEW: Added traveler telephone  
       travel_start_date,
       travel_end_date,
       coverage_duration,
@@ -332,33 +353,49 @@ const createTravelInsuranceQuote = async (req, res) => {
 
     const connection = getConnection();
 
+    // Check which columns exist
     const hasCoverageAmount = await columnExists(connection, 'travel_insurance_quotes', 'coverage_amount');
     const hasTotalPremium = await columnExists(connection, 'travel_insurance_quotes', 'total_premium');
+    const hasTravelerName = await columnExists(connection, 'travel_insurance_quotes', 'traveler_name');
+    const hasTravelerEmail = await columnExists(connection, 'travel_insurance_quotes', 'traveler_email');
+    const hasTravelerPhone = await columnExists(connection, 'travel_insurance_quotes', 'traveler_telephone');
 
-    let query, values;
+    let query = `INSERT INTO travel_insurance_quotes (wallet_address, origin, departure, destination, passport_number, passport_country, travel_start_date, travel_end_date, coverage_duration`;
+    let values = [wallet_address, origin, departure, destination, passport_number, passport_country, travel_start_date, travel_end_date, coverage_duration];
+    let placeholders = `?, ?, ?, ?, ?, ?, ?, ?, ?`;
 
-    if (hasCoverageAmount && hasTotalPremium) {
-      if (!coverage_amount) {
-        return res.status(400).json({
-          success: false,
-          message: 'Coverage amount is required'
-        });
-      }
-
-      query = `INSERT INTO travel_insurance_quotes 
-               (wallet_address, origin, departure, destination, passport_number, 
-                passport_country, travel_start_date, travel_end_date, coverage_duration, coverage_amount, total_premium) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-      values = [wallet_address, origin, departure, destination, passport_number,
-        passport_country, travel_start_date, travel_end_date, coverage_duration, coverage_amount, total_premium || 300];
-    } else {
-      query = `INSERT INTO travel_insurance_quotes 
-               (wallet_address, origin, departure, destination, passport_number, 
-                passport_country, travel_start_date, travel_end_date, coverage_duration) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-      values = [wallet_address, origin, departure, destination, passport_number,
-        passport_country, travel_start_date, travel_end_date, coverage_duration];
+    // Add optional columns if they exist
+    if (hasCoverageAmount) {
+      query += `, coverage_amount`;
+      placeholders += `, ?`;
+      values.push(coverage_amount || 25000);
     }
+    
+    if (hasTotalPremium) {
+      query += `, total_premium`;
+      placeholders += `, ?`;
+      values.push(total_premium || 300);
+    }
+    
+    if (hasTravelerName && traveler_name) {
+      query += `, traveler_name`;
+      placeholders += `, ?`;
+      values.push(traveler_name);
+    }
+    
+    if (hasTravelerEmail && traveler_email) {
+      query += `, traveler_email`;
+      placeholders += `, ?`;
+      values.push(traveler_email);
+    }
+    
+    if (hasTravelerPhone && traveler_telephone) {
+      query += `, traveler_telephone`;
+      placeholders += `, ?`;
+      values.push(traveler_telephone);
+    }
+
+    query += `) VALUES (${placeholders})`;
 
     const [result] = await connection.execute(query, values);
 
@@ -380,7 +417,10 @@ const createTravelInsuranceQuote = async (req, res) => {
     const policyDataWithDefaults = {
       ...policyData[0],
       coverage_amount: policyData[0].coverage_amount || coverage_amount || 25000,
-      total_premium: policyData[0].total_premium || total_premium || 300
+      total_premium: policyData[0].total_premium || total_premium || 300,
+      traveler_name: policyData[0].traveler_name || traveler_name,
+      traveler_email: policyData[0].traveler_email || traveler_email,
+      traveler_telephone: policyData[0].traveler_telephone || traveler_telephone
     };
 
     // Format policy data for PDF/Email
@@ -402,12 +442,8 @@ const createTravelInsuranceQuote = async (req, res) => {
       email_sending: 'initiated'
     };
 
-    if (hasCoverageAmount && (coverage_amount || policyDataWithDefaults.coverage_amount)) {
-      responseData.coverage_amount = policyDataWithDefaults.coverage_amount;
-    }
-    if (hasTotalPremium && (total_premium || policyDataWithDefaults.total_premium)) {
-      responseData.total_premium = policyDataWithDefaults.total_premium;
-    }
+    if (hasCoverageAmount) responseData.coverage_amount = policyDataWithDefaults.coverage_amount;
+    if (hasTotalPremium) responseData.total_premium = policyDataWithDefaults.total_premium;
 
     res.status(201).json({
       success: true,
@@ -424,7 +460,7 @@ const createTravelInsuranceQuote = async (req, res) => {
   }
 };
 
-// Get Active Policies
+// Get Active Policies (unchanged)
 const getActivePolicies = async (req, res) => {
   try {
     const { wallet_address } = req.params;
@@ -490,7 +526,7 @@ const getActivePolicies = async (req, res) => {
   }
 };
 
-// Get Single Policy Details by ID with Policy Type (UPDATED)
+// Get Single Policy Details by ID with Policy Type (unchanged but improved)
 const getPolicyById = async (req, res) => {
   try {
     const { policy_id } = req.params;
@@ -530,13 +566,7 @@ const getPolicyById = async (req, res) => {
           actualPolicyType = 'home';
         }
       } else if (policy_type === 'car') {
-        const carHasCoverage = await columnExists(connection, 'car_insurance_quotes', 'coverage_amount');
-        const carHasPremium = await columnExists(connection, 'car_insurance_quotes', 'total_premium');
-
-        let carQuery = `SELECT *, 'car' as policy_type`;
-        if (carHasCoverage) carQuery += `, coverage_amount`;
-        if (carHasPremium) carQuery += `, total_premium`;
-        carQuery += ` FROM car_insurance_quotes WHERE id = ?`;
+        let carQuery = `SELECT *, 'car' as policy_type FROM car_insurance_quotes WHERE id = ?`;
         if (wallet_address) carQuery += ` AND wallet_address = ?`;
 
         const [carPolicies] = await connection.execute(carQuery,
@@ -545,17 +575,9 @@ const getPolicyById = async (req, res) => {
         if (carPolicies.length > 0) {
           policyData = carPolicies[0];
           actualPolicyType = 'car';
-          if (!carHasCoverage) policyData.coverage_amount = 50000;
-          if (!carHasPremium) policyData.total_premium = 1200;
         }
       } else if (policy_type === 'travel') {
-        const travelHasCoverage = await columnExists(connection, 'travel_insurance_quotes', 'coverage_amount');
-        const travelHasPremium = await columnExists(connection, 'travel_insurance_quotes', 'total_premium');
-
-        let travelQuery = `SELECT *, 'travel' as policy_type`;
-        if (travelHasCoverage) travelQuery += `, coverage_amount`;
-        if (travelHasPremium) travelQuery += `, total_premium`;
-        travelQuery += ` FROM travel_insurance_quotes WHERE id = ?`;
+        let travelQuery = `SELECT *, 'travel' as policy_type FROM travel_insurance_quotes WHERE id = ?`;
         if (wallet_address) travelQuery += ` AND wallet_address = ?`;
 
         const [travelPolicies] = await connection.execute(travelQuery,
@@ -564,8 +586,6 @@ const getPolicyById = async (req, res) => {
         if (travelPolicies.length > 0) {
           policyData = travelPolicies[0];
           actualPolicyType = 'travel';
-          if (!travelHasCoverage) policyData.coverage_amount = 25000;
-          if (!travelHasPremium) policyData.total_premium = 300;
         }
       }
     } else {
@@ -581,13 +601,7 @@ const getPolicyById = async (req, res) => {
         actualPolicyType = 'home';
       } else {
         // Check Car Insurance
-        const carHasCoverage = await columnExists(connection, 'car_insurance_quotes', 'coverage_amount');
-        const carHasPremium = await columnExists(connection, 'car_insurance_quotes', 'total_premium');
-
-        let carQuery = `SELECT *, 'car' as policy_type`;
-        if (carHasCoverage) carQuery += `, coverage_amount`;
-        if (carHasPremium) carQuery += `, total_premium`;
-        carQuery += ` FROM car_insurance_quotes WHERE id = ?`;
+        let carQuery = `SELECT *, 'car' as policy_type FROM car_insurance_quotes WHERE id = ?`;
         if (wallet_address) carQuery += ` AND wallet_address = ?`;
 
         const [carPolicies] = await connection.execute(carQuery,
@@ -596,17 +610,9 @@ const getPolicyById = async (req, res) => {
         if (carPolicies.length > 0) {
           policyData = carPolicies[0];
           actualPolicyType = 'car';
-          if (!carHasCoverage) policyData.coverage_amount = 50000;
-          if (!carHasPremium) policyData.total_premium = 1200;
         } else {
           // Check Travel Insurance
-          const travelHasCoverage = await columnExists(connection, 'travel_insurance_quotes', 'coverage_amount');
-          const travelHasPremium = await columnExists(connection, 'travel_insurance_quotes', 'total_premium');
-
-          let travelQuery = `SELECT *, 'travel' as policy_type`;
-          if (travelHasCoverage) travelQuery += `, coverage_amount`;
-          if (travelHasPremium) travelQuery += `, total_premium`;
-          travelQuery += ` FROM travel_insurance_quotes WHERE id = ?`;
+          let travelQuery = `SELECT *, 'travel' as policy_type FROM travel_insurance_quotes WHERE id = ?`;
           if (wallet_address) travelQuery += ` AND wallet_address = ?`;
 
           const [travelPolicies] = await connection.execute(travelQuery,
@@ -615,8 +621,6 @@ const getPolicyById = async (req, res) => {
           if (travelPolicies.length > 0) {
             policyData = travelPolicies[0];
             actualPolicyType = 'travel';
-            if (!travelHasCoverage) policyData.coverage_amount = 25000;
-            if (!travelHasPremium) policyData.total_premium = 300;
           }
         }
       }
@@ -673,8 +677,8 @@ const getPolicyById = async (req, res) => {
         policyData.status || 'approved'
       ),
       created_at: policyData.created_at,
-      coverage_amount: policyData.coverage_amount,
-      total_premium: policyData.total_premium,
+      coverage_amount: policyData.coverage_amount || (actualPolicyType === 'car' ? 50000 : actualPolicyType === 'travel' ? 25000 : 250000),
+      total_premium: policyData.total_premium || (actualPolicyType === 'car' ? 1200 : actualPolicyType === 'travel' ? 300 : 1200),
       deductible: calculateDeductible(policyData.coverage_amount, actualPolicyType),
       formatted_coverage: policyData.coverage_amount ?
         '$' + parseFloat(policyData.coverage_amount).toLocaleString('en-US') : '$50,000',
@@ -684,7 +688,7 @@ const getPolicyById = async (req, res) => {
         '$' + calculateDeductible(policyData.coverage_amount, actualPolicyType).toLocaleString('en-US') : '$2,500'
     };
 
-    // Add type-specific details
+    // Add type-specific details including email fields
     if (actualPolicyType === 'home') {
       formattedPolicy = {
         ...formattedPolicy,
@@ -705,6 +709,9 @@ const getPolicyById = async (req, res) => {
         car_model: policyData.car_model,
         car_year: policyData.car_year,
         mileage: policyData.mileage,
+        car_owner_name: policyData.car_owner_name,           // NEW: Added email fields
+        car_owner_email: policyData.car_owner_email,         // NEW: Added email fields
+        car_owner_telephone: policyData.car_owner_telephone, // NEW: Added email fields
         policy_start_date: policyData.policy_start_date,
         policy_end_date: policyData.policy_end_date,
         coverage_duration: policyData.coverage_duration,
@@ -718,6 +725,9 @@ const getPolicyById = async (req, res) => {
         destination: policyData.destination,
         passport_number: policyData.passport_number,
         passport_country: policyData.passport_country,
+        traveler_name: policyData.traveler_name,               // NEW: Added email fields
+        traveler_email: policyData.traveler_email,             // NEW: Added email fields
+        traveler_telephone: policyData.traveler_telephone,     // NEW: Added email fields
         travel_start_date: policyData.travel_start_date,
         travel_end_date: policyData.travel_end_date,
         coverage_duration: policyData.coverage_duration,
