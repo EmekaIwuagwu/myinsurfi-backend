@@ -5,7 +5,8 @@ const {
   generateHomeInsurancePDF,
   generateCarInsurancePDF,
   generateTravelInsurancePDF,
-  generateNameFromWallet
+  generateNameFromWallet,
+  cleanTextForPDF
 } = require('../services/pdfService');
 
 const { sendPolicyEmail } = require('../services/emailService');
@@ -29,19 +30,29 @@ const columnExists = async (connection, tableName, columnName) => {
 // Helper function to generate policy data for PDF/Email
 const formatPolicyDataForPDF = (rawData, policyType) => {
   const policyNumber = `${policyType.toUpperCase().substring(0, 2)}-${new Date().getFullYear()}-${rawData.id}`;
-
+  
+  // Clean all text fields to ensure PDF compatibility
+  const cleanData = {};
+  for (const [key, value] of Object.entries(rawData)) {
+    if (typeof value === 'string') {
+      cleanData[key] = cleanTextForPDF(value);
+    } else {
+      cleanData[key] = value;
+    }
+  }
+  
   return {
-    ...rawData,
+    ...cleanData,
     policy_number: policyNumber,
     policy_type: policyType,
-    formatted_coverage: rawData.coverage_amount ?
-      `$${parseFloat(rawData.coverage_amount).toLocaleString('en-US')}` :
+    formatted_coverage: cleanData.coverage_amount ? 
+      `$${parseFloat(cleanData.coverage_amount).toLocaleString('en-US')}` : 
       null,
-    formatted_premium: rawData.total_premium ?
-      `$${parseFloat(rawData.total_premium).toLocaleString('en-US')}` :
+    formatted_premium: cleanData.total_premium ? 
+      `$${parseFloat(cleanData.total_premium).toLocaleString('en-US')}` : 
       null,
-    customer_name: rawData.property_owner_name || generateNameFromWallet(rawData.wallet_address),
-    customer_email: rawData.property_owner_email || `${generateNameFromWallet(rawData.wallet_address).toLowerCase().replace(' ', '.')}@example.com`
+    customer_name: cleanData.property_owner_name || generateNameFromWallet(cleanData.wallet_address),
+    customer_email: cleanData.property_owner_email || `${generateNameFromWallet(cleanData.wallet_address).toLowerCase().replace(' ', '.')}@example.com`
   };
 };
 
@@ -49,9 +60,9 @@ const formatPolicyDataForPDF = (rawData, policyType) => {
 const generateAndSendPolicyPDF = async (policyData, policyType) => {
   try {
     console.log(`🔄 Generating ${policyType} insurance PDF for policy ID: ${policyData.id}`);
-
+    
     let pdfBuffer;
-
+    
     // Generate PDF based on policy type
     switch (policyType) {
       case 'home':
@@ -66,27 +77,27 @@ const generateAndSendPolicyPDF = async (policyData, policyType) => {
       default:
         throw new Error(`Unknown policy type: ${policyType}`);
     }
-
+    
     console.log(`✅ PDF generated successfully for ${policyType} insurance`);
-
+    
     // Send email with PDF if customer email is available
     if (policyData.customer_email && policyData.customer_email !== 'N/A') {
       console.log(`📧 Sending policy email to: ${policyData.customer_email}`);
-
+      
       await sendPolicyEmail(
         policyData.customer_email,
         policyData,
         pdfBuffer,
         policyType
       );
-
+      
       console.log(`✅ Policy email sent successfully for ${policyType} insurance`);
     } else {
       console.log(`⚠️  No valid email address found, PDF generated but not sent`);
     }
-
+    
     return { success: true, pdfGenerated: true, emailSent: !!policyData.customer_email };
-
+    
   } catch (error) {
     console.error(`❌ Error generating/sending ${policyType} insurance PDF:`, error);
     // Don't throw error to prevent policy creation failure
@@ -148,7 +159,7 @@ const createHomeInsuranceQuote = async (req, res) => {
 
     // Format policy data for PDF/Email
     const formattedPolicyData = formatPolicyDataForPDF(policyData[0], 'home');
-
+    
     // Generate PDF and send email (async, don't wait for completion)
     generateAndSendPolicyPDF(formattedPolicyData, 'home')
       .then(result => {
@@ -161,7 +172,7 @@ const createHomeInsuranceQuote = async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'Home insurance quote created successfully',
-      data: {
+      data: { 
         id: result.insertId,
         policy_number: formattedPolicyData.policy_number,
         pdf_generation: 'initiated',
@@ -256,7 +267,7 @@ const createCarInsuranceQuote = async (req, res) => {
 
     // Format policy data for PDF/Email
     const formattedPolicyData = formatPolicyDataForPDF(policyDataWithDefaults, 'car');
-
+    
     // Generate PDF and send email (async, don't wait for completion)
     generateAndSendPolicyPDF(formattedPolicyData, 'car')
       .then(result => {
@@ -266,7 +277,7 @@ const createCarInsuranceQuote = async (req, res) => {
         console.error('🚫 Car insurance PDF/Email error:', error);
       });
 
-    const responseData = {
+    const responseData = { 
       id: result.insertId,
       policy_number: formattedPolicyData.policy_number,
       pdf_generation: 'initiated',
@@ -374,7 +385,7 @@ const createTravelInsuranceQuote = async (req, res) => {
 
     // Format policy data for PDF/Email
     const formattedPolicyData = formatPolicyDataForPDF(policyDataWithDefaults, 'travel');
-
+    
     // Generate PDF and send email (async, don't wait for completion)
     generateAndSendPolicyPDF(formattedPolicyData, 'travel')
       .then(result => {
@@ -384,7 +395,7 @@ const createTravelInsuranceQuote = async (req, res) => {
         console.error('🚫 Travel insurance PDF/Email error:', error);
       });
 
-    const responseData = {
+    const responseData = { 
       id: result.insertId,
       policy_number: formattedPolicyData.policy_number,
       pdf_generation: 'initiated',

@@ -12,6 +12,24 @@ const COLORS = {
   black: rgb(0, 0, 0)
 };
 
+// Helper function to clean text for PDF compatibility (removes emojis and special characters)
+function cleanTextForPDF(text) {
+  if (!text) return '';
+  
+  // Convert to string and remove emoji and other Unicode characters that WinAnsi can't encode
+  return text.toString()
+    .replace(/[\u{1F600}-\u{1F64F}]/gu, '') // Emoticons
+    .replace(/[\u{1F300}-\u{1F5FF}]/gu, '') // Misc Symbols and Pictographs
+    .replace(/[\u{1F680}-\u{1F6FF}]/gu, '') // Transport and Map Symbols
+    .replace(/[\u{1F1E0}-\u{1F1FF}]/gu, '') // Regional Indicator Symbols (flags)
+    .replace(/[\u{2600}-\u{26FF}]/gu, '')   // Misc symbols
+    .replace(/[\u{2700}-\u{27BF}]/gu, '')   // Dingbats
+    .replace(/[\u{FE00}-\u{FE0F}]/gu, '')   // Variation Selectors
+    .replace(/[\u{1F900}-\u{1F9FF}]/gu, '') // Supplemental Symbols and Pictographs
+    .replace(/[\u0080-\u00FF]/g, '')        // Remove extended ASCII that might cause issues
+    .trim();
+}
+
 // Generate PDF for Home Insurance Policy
 const generateHomeInsurancePDF = async (policyData) => {
   try {
@@ -34,7 +52,7 @@ const generateHomeInsurancePDF = async (policyData) => {
     });
     
     // Company Logo Area (text-based)
-    page.drawText('🏠 MyInsurFi', {
+    page.drawText('MyInsurFi', {
       x: 50,
       y: height - 60,
       size: 24,
@@ -180,7 +198,7 @@ const generateCarInsurancePDF = async (policyData) => {
       color: COLORS.primary,
     });
     
-    page.drawText('🚗 MyInsurFi', {
+    page.drawText('MyInsurFi', {
       x: 50,
       y: height - 60,
       size: 24,
@@ -317,7 +335,7 @@ const generateTravelInsurancePDF = async (policyData) => {
       color: COLORS.primary,
     });
     
-    page.drawText('✈️ MyInsurFi', {
+    page.drawText('MyInsurFi', {
       x: 50,
       y: height - 60,
       size: 24,
@@ -434,7 +452,7 @@ const generateTravelInsurancePDF = async (policyData) => {
 
 // Helper Functions
 function drawSectionHeader(page, title, x, y, font, color) {
-  page.drawText(title, {
+  page.drawText(cleanTextForPDF(title), {
     x,
     y,
     size: 14,
@@ -452,7 +470,7 @@ function drawSectionHeader(page, title, x, y, font, color) {
 }
 
 function drawPolicyField(page, label, value, x, y, font, boldFont) {
-  page.drawText(label, {
+  page.drawText(cleanTextForPDF(label), {
     x,
     y,
     size: 10,
@@ -460,7 +478,7 @@ function drawPolicyField(page, label, value, x, y, font, boldFont) {
     color: COLORS.dark,
   });
   
-  page.drawText(value, {
+  page.drawText(cleanTextForPDF(value), {
     x,
     y: y - 15,
     size: 10,
@@ -472,7 +490,7 @@ function drawPolicyField(page, label, value, x, y, font, boldFont) {
 }
 
 function drawPropertyAddress(page, label, address, x, y, font, boldFont) {
-  page.drawText(label, {
+  page.drawText(cleanTextForPDF(label), {
     x,
     y,
     size: 10,
@@ -482,7 +500,8 @@ function drawPropertyAddress(page, label, address, x, y, font, boldFont) {
   
   // Handle long addresses by wrapping text
   const maxWidth = 200;
-  const words = address.split(' ');
+  const cleanAddress = cleanTextForPDF(address);
+  const words = cleanAddress.split(' ');
   let currentLine = '';
   let lineY = y - 15;
   
@@ -538,7 +557,7 @@ function drawTable(page, data, x, startY, font, boldFont) {
     }
     
     row.forEach((cell, colIndex) => {
-      page.drawText(cell, {
+      page.drawText(cleanTextForPDF(cell), {
         x: currentX + 10,
         y: currentY - 15,
         size: 9,
@@ -636,5 +655,6 @@ module.exports = {
   generateCarInsurancePDF,
   generateTravelInsurancePDF,
   formatCurrency,
-  generateNameFromWallet
+  generateNameFromWallet,
+  cleanTextForPDF
 };
