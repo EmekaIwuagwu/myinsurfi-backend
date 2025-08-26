@@ -1,5 +1,15 @@
 const { getConnection } = require('../config/database');
 
+// Import PDF and Email services
+const {
+  generateHomeInsurancePDF,
+  generateCarInsurancePDF,
+  generateTravelInsurancePDF,
+  generateNameFromWallet
+} = require('../services/pdfService');
+
+const { sendPolicyEmail } = require('../services/emailService');
+
 // Helper function to check if column exists in table
 const columnExists = async (connection, tableName, columnName) => {
   try {
@@ -13,6 +23,74 @@ const columnExists = async (connection, tableName, columnName) => {
     return result[0].count > 0;
   } catch (error) {
     return false;
+  }
+};
+
+// Helper function to generate policy data for PDF/Email
+const formatPolicyDataForPDF = (rawData, policyType) => {
+  const policyNumber = `${policyType.toUpperCase().substring(0, 2)}-${new Date().getFullYear()}-${rawData.id}`;
+
+  return {
+    ...rawData,
+    policy_number: policyNumber,
+    policy_type: policyType,
+    formatted_coverage: rawData.coverage_amount ?
+      `$${parseFloat(rawData.coverage_amount).toLocaleString('en-US')}` :
+      null,
+    formatted_premium: rawData.total_premium ?
+      `$${parseFloat(rawData.total_premium).toLocaleString('en-US')}` :
+      null,
+    customer_name: rawData.property_owner_name || generateNameFromWallet(rawData.wallet_address),
+    customer_email: rawData.property_owner_email || `${generateNameFromWallet(rawData.wallet_address).toLowerCase().replace(' ', '.')}@example.com`
+  };
+};
+
+// Helper function to handle PDF generation and email sending
+const generateAndSendPolicyPDF = async (policyData, policyType) => {
+  try {
+    console.log(`🔄 Generating ${policyType} insurance PDF for policy ID: ${policyData.id}`);
+
+    let pdfBuffer;
+
+    // Generate PDF based on policy type
+    switch (policyType) {
+      case 'home':
+        pdfBuffer = await generateHomeInsurancePDF(policyData);
+        break;
+      case 'car':
+        pdfBuffer = await generateCarInsurancePDF(policyData);
+        break;
+      case 'travel':
+        pdfBuffer = await generateTravelInsurancePDF(policyData);
+        break;
+      default:
+        throw new Error(`Unknown policy type: ${policyType}`);
+    }
+
+    console.log(`✅ PDF generated successfully for ${policyType} insurance`);
+
+    // Send email with PDF if customer email is available
+    if (policyData.customer_email && policyData.customer_email !== 'N/A') {
+      console.log(`📧 Sending policy email to: ${policyData.customer_email}`);
+
+      await sendPolicyEmail(
+        policyData.customer_email,
+        policyData,
+        pdfBuffer,
+        policyType
+      );
+
+      console.log(`✅ Policy email sent successfully for ${policyType} insurance`);
+    } else {
+      console.log(`⚠️  No valid email address found, PDF generated but not sent`);
+    }
+
+    return { success: true, pdfGenerated: true, emailSent: !!policyData.customer_email };
+
+  } catch (error) {
+    console.error(`❌ Error generating/sending ${policyType} insurance PDF:`, error);
+    // Don't throw error to prevent policy creation failure
+    return { success: false, error: error.message, pdfGenerated: false, emailSent: false };
   }
 };
 
@@ -54,6 +132,13 @@ const createHomeInsuranceQuote = async (req, res) => {
         coverage_duration, coverage_amount, total_premium]
     );
 
+    // Get the created policy data
+    const [policyData] = await connection.execute(
+      'SELECT * FROM home_insurance_quotes WHERE id = ?',
+      [result.insertId]
+    );
+
+    // Create notification
     await connection.execute(
       `INSERT INTO notifications (wallet_address, type, title, message) 
        VALUES (?, ?, ?, ?)`,
@@ -61,10 +146,27 @@ const createHomeInsuranceQuote = async (req, res) => {
         'Your home insurance quote has been successfully created.']
     );
 
+    // Format policy data for PDF/Email
+    const formattedPolicyData = formatPolicyDataForPDF(policyData[0], 'home');
+
+    // Generate PDF and send email (async, don't wait for completion)
+    generateAndSendPolicyPDF(formattedPolicyData, 'home')
+      .then(result => {
+        console.log('📄 Home insurance PDF/Email result:', result);
+      })
+      .catch(error => {
+        console.error('🚫 Home insurance PDF/Email error:', error);
+      });
+
     res.status(201).json({
       success: true,
       message: 'Home insurance quote created successfully',
-      data: { id: result.insertId }
+      data: {
+        id: result.insertId,
+        policy_number: formattedPolicyData.policy_number,
+        pdf_generation: 'initiated',
+        email_sending: 'initiated'
+      }
     });
   } catch (error) {
     console.error('Error creating home insurance quote:', error);
@@ -119,7 +221,7 @@ const createCarInsuranceQuote = async (req, res) => {
                 policy_start_date, policy_end_date, coverage_duration, coverage_amount, total_premium) 
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
       values = [wallet_address, car_make, car_model, car_year, mileage,
-        policy_start_date, policy_end_date, coverage_duration, coverage_amount, total_premium || 0];
+        policy_start_date, policy_end_date, coverage_duration, coverage_amount, total_premium || 1200];
     } else {
       query = `INSERT INTO car_insurance_quotes 
                (wallet_address, car_make, car_model, car_year, mileage, 
@@ -131,6 +233,13 @@ const createCarInsuranceQuote = async (req, res) => {
 
     const [result] = await connection.execute(query, values);
 
+    // Get the created policy data
+    const [policyData] = await connection.execute(
+      'SELECT * FROM car_insurance_quotes WHERE id = ?',
+      [result.insertId]
+    );
+
+    // Create notification
     await connection.execute(
       `INSERT INTO notifications (wallet_address, type, title, message) 
        VALUES (?, ?, ?, ?)`,
@@ -138,12 +247,37 @@ const createCarInsuranceQuote = async (req, res) => {
         'Your car insurance quote has been successfully created.']
     );
 
-    const responseData = { id: result.insertId };
-    if (hasCoverageAmount && coverage_amount) {
-      responseData.coverage_amount = coverage_amount;
+    // Add default values for missing columns
+    const policyDataWithDefaults = {
+      ...policyData[0],
+      coverage_amount: policyData[0].coverage_amount || coverage_amount || 50000,
+      total_premium: policyData[0].total_premium || total_premium || 1200
+    };
+
+    // Format policy data for PDF/Email
+    const formattedPolicyData = formatPolicyDataForPDF(policyDataWithDefaults, 'car');
+
+    // Generate PDF and send email (async, don't wait for completion)
+    generateAndSendPolicyPDF(formattedPolicyData, 'car')
+      .then(result => {
+        console.log('📄 Car insurance PDF/Email result:', result);
+      })
+      .catch(error => {
+        console.error('🚫 Car insurance PDF/Email error:', error);
+      });
+
+    const responseData = {
+      id: result.insertId,
+      policy_number: formattedPolicyData.policy_number,
+      pdf_generation: 'initiated',
+      email_sending: 'initiated'
+    };
+
+    if (hasCoverageAmount && (coverage_amount || policyDataWithDefaults.coverage_amount)) {
+      responseData.coverage_amount = policyDataWithDefaults.coverage_amount;
     }
-    if (hasTotalPremium && total_premium) {
-      responseData.total_premium = total_premium;
+    if (hasTotalPremium && (total_premium || policyDataWithDefaults.total_premium)) {
+      responseData.total_premium = policyDataWithDefaults.total_premium;
     }
 
     res.status(201).json({
@@ -205,7 +339,7 @@ const createTravelInsuranceQuote = async (req, res) => {
                 passport_country, travel_start_date, travel_end_date, coverage_duration, coverage_amount, total_premium) 
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
       values = [wallet_address, origin, departure, destination, passport_number,
-        passport_country, travel_start_date, travel_end_date, coverage_duration, coverage_amount, total_premium || 0];
+        passport_country, travel_start_date, travel_end_date, coverage_duration, coverage_amount, total_premium || 300];
     } else {
       query = `INSERT INTO travel_insurance_quotes 
                (wallet_address, origin, departure, destination, passport_number, 
@@ -217,6 +351,13 @@ const createTravelInsuranceQuote = async (req, res) => {
 
     const [result] = await connection.execute(query, values);
 
+    // Get the created policy data
+    const [policyData] = await connection.execute(
+      'SELECT * FROM travel_insurance_quotes WHERE id = ?',
+      [result.insertId]
+    );
+
+    // Create notification
     await connection.execute(
       `INSERT INTO notifications (wallet_address, type, title, message) 
        VALUES (?, ?, ?, ?)`,
@@ -224,12 +365,37 @@ const createTravelInsuranceQuote = async (req, res) => {
         'Your travel insurance quote has been successfully created.']
     );
 
-    const responseData = { id: result.insertId };
-    if (hasCoverageAmount && coverage_amount) {
-      responseData.coverage_amount = coverage_amount;
+    // Add default values for missing columns
+    const policyDataWithDefaults = {
+      ...policyData[0],
+      coverage_amount: policyData[0].coverage_amount || coverage_amount || 25000,
+      total_premium: policyData[0].total_premium || total_premium || 300
+    };
+
+    // Format policy data for PDF/Email
+    const formattedPolicyData = formatPolicyDataForPDF(policyDataWithDefaults, 'travel');
+
+    // Generate PDF and send email (async, don't wait for completion)
+    generateAndSendPolicyPDF(formattedPolicyData, 'travel')
+      .then(result => {
+        console.log('📄 Travel insurance PDF/Email result:', result);
+      })
+      .catch(error => {
+        console.error('🚫 Travel insurance PDF/Email error:', error);
+      });
+
+    const responseData = {
+      id: result.insertId,
+      policy_number: formattedPolicyData.policy_number,
+      pdf_generation: 'initiated',
+      email_sending: 'initiated'
+    };
+
+    if (hasCoverageAmount && (coverage_amount || policyDataWithDefaults.coverage_amount)) {
+      responseData.coverage_amount = policyDataWithDefaults.coverage_amount;
     }
-    if (hasTotalPremium && total_premium) {
-      responseData.total_premium = total_premium;
+    if (hasTotalPremium && (total_premium || policyDataWithDefaults.total_premium)) {
+      responseData.total_premium = policyDataWithDefaults.total_premium;
     }
 
     res.status(201).json({
@@ -454,9 +620,6 @@ const getPolicyById = async (req, res) => {
       });
     }
 
-    // Rest of the function remains the same...
-    // (Keep all the formatting code from before)
-
     // Generate policy number
     const generatePolicyNumber = (id, type) => {
       const prefixes = { 'home': 'HI', 'car': 'CI', 'travel': 'TI' };
@@ -510,8 +673,46 @@ const getPolicyById = async (req, res) => {
         '$' + calculateDeductible(policyData.coverage_amount, actualPolicyType).toLocaleString('en-US') : '$2,500'
     };
 
-    // Add the rest of the type-specific details code here...
-    // (Copy the same formatting code from the previous version)
+    // Add type-specific details
+    if (actualPolicyType === 'home') {
+      formattedPolicy = {
+        ...formattedPolicy,
+        house_type: policyData.house_type,
+        year_built: policyData.year_built,
+        house_address: policyData.house_address,
+        property_owner_name: policyData.property_owner_name,
+        property_owner_telephone: policyData.property_owner_telephone,
+        property_owner_email: policyData.property_owner_email,
+        policy_start_date: policyData.policy_start_date,
+        policy_end_date: policyData.policy_end_date,
+        coverage_duration: policyData.coverage_duration
+      };
+    } else if (actualPolicyType === 'car') {
+      formattedPolicy = {
+        ...formattedPolicy,
+        car_make: policyData.car_make,
+        car_model: policyData.car_model,
+        car_year: policyData.car_year,
+        mileage: policyData.mileage,
+        policy_start_date: policyData.policy_start_date,
+        policy_end_date: policyData.policy_end_date,
+        coverage_duration: policyData.coverage_duration,
+        vehicle_description: `${policyData.car_year} ${policyData.car_make} ${policyData.car_model}`
+      };
+    } else if (actualPolicyType === 'travel') {
+      formattedPolicy = {
+        ...formattedPolicy,
+        origin: policyData.origin,
+        departure: policyData.departure,
+        destination: policyData.destination,
+        passport_number: policyData.passport_number,
+        passport_country: policyData.passport_country,
+        travel_start_date: policyData.travel_start_date,
+        travel_end_date: policyData.travel_end_date,
+        coverage_duration: policyData.coverage_duration,
+        trip_description: `${policyData.origin} to ${policyData.destination}`
+      };
+    }
 
     res.json({
       success: true,
