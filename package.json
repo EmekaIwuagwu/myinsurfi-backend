@@ -8,7 +8,8 @@
     "dev": "nodemon app.js",
     "migrate": "node migrations/migrate.js",
     "admin-migrate": "node migrations/admin-migrate.js",
-    "setup": "npm run migrate && npm run admin-migrate"
+    "email-migrate": "node migrations/add-email-fields.js",
+    "setup": "npm run migrate && npm run admin-migrate && npm run email-migrate"
   },
   "dependencies": {
     "body-parser": "^1.20.2",
