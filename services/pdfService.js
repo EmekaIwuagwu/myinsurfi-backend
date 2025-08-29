@@ -595,6 +595,7 @@ function drawTable(page, data, x, startY, font, boldFont) {
 function drawFooter(page, width, font) {
   const footerY = 50;
   
+  // Draw footer separator line
   page.drawLine({
     start: { x: 50, y: footerY + 30 },
     end: { x: width - 50, y: footerY + 30 },
@@ -602,6 +603,7 @@ function drawFooter(page, width, font) {
     color: COLORS.gray,
   });
   
+  // Left-aligned platform text
   page.drawText('MyInsurFi - Decentralized Insurance Platform', {
     x: 50,
     y: footerY + 10,
@@ -610,16 +612,24 @@ function drawFooter(page, width, font) {
     color: COLORS.gray,
   });
   
-  page.drawText(`Generated on ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}`, {
-    x: width - 200,
+  // Right-aligned generated date text - calculate proper positioning
+  const generatedText = `Generated on ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}`;
+  const textWidth = generatedText.length * 4.8; // Approximate width for size 8 font
+  
+  page.drawText(generatedText, {
+    x: width - 50 - textWidth, // Position from right edge minus text width
     y: footerY + 10,
     size: 8,
     font,
     color: COLORS.gray,
   });
   
-  page.drawText('This is a computer-generated document. No signature is required.', {
-    x: 50,
+  // Center-aligned disclaimer text
+  const disclaimerText = 'This is a computer-generated document. No signature is required.';
+  const disclaimerWidth = disclaimerText.length * 4.8;
+  
+  page.drawText(disclaimerText, {
+    x: (width - disclaimerWidth) / 2, // Center the text
     y: footerY - 10,
     size: 8,
     font,
